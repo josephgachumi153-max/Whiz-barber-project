@@ -58,7 +58,7 @@ async function main() {
   // Shampoo assistant in the shared staff pool
   const shampooUser = await prisma.user.upsert({
     where: { username: "shampoo" },
-    update: {},
+    update: { role: Role.SHAMPOO_ASSISTANT },
     create: {
       username: "shampoo",
       passwordHash: shampooHash,
