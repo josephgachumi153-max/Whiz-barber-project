@@ -70,7 +70,7 @@ type Sale = {
   paymentMethod?: string;
 };
 
-const API = "/api";
+const API = (import.meta.env.VITE_API_URL || "/api").replace(/\/$/, "");
 
 function money(v: number | string) {
   return `KES ${Number(v).toLocaleString("en-KE", {

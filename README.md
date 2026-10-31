@@ -1,73 +1,65 @@
-# Whiz Barbershop Management System (Vercel Edition)
+# Whiz Barbershop Management System
 
-A walk-in barbershop management web app built with React 19, Vite, Fastify 5, Prisma 6, and PostgreSQL, architected for zero-configuration deployment to **Vercel Serverless Functions**.
+A walk-in barbershop management web app built with React 19, Vite, Fastify 5, Prisma 6, and PostgreSQL.
 
 ---
 
-## Architecture for Vercel
+## Deployment architecture
 
-- **Frontend**: React 19 SPA built with Vite, served via Vercel's Edge CDN.
-- **Backend**: Fastify 5 API running as a unified Vercel Serverless Function (`/api/index.ts`).
-- **Database**: External PostgreSQL (Neon, Supabase, or Vercel Postgres) connected via Prisma 6 with connection pooling.
+- **Frontend**: React 19 SPA built with Vite and deployed to Vercel.
+- **Backend**: Fastify 5 API deployed as a Render web service from `api/index.ts`.
+- **Database**: Supabase PostgreSQL connected to the Render API through Prisma 6.
+- **Frontend/API connection**: Set Vercel's `VITE_API_URL` to the Render API URL ending in `/api`.
 - **Security**: JWT authentication, `bcryptjs` password hashing (pure JavaScript, avoiding native C++ build errors in serverless containers).
 - **Invariants**: 1 active order per barber enforced via database partial unique index; atomic order completion and sales transaction recording.
 
 ---
 
-## 5-Minute Deployment Guide to Vercel
+## Deployment guide
 
-### Step 1: Set Up a Serverless PostgreSQL Database
-Because Vercel is a serverless platform, it requires a hosted cloud PostgreSQL database with connection pooling:
-- **Neon** (Recommended, Free): https://neon.tech
-  - Create a project `whiz-barbershop`.
-  - Copy the **Pooled connection string** (ends in `-pooler.neon.tech`).
-  - Copy the **Direct connection string** (unpooled).
-- **Supabase** (Alternative, Free): https://supabase.com
-  - Create a project and obtain the connection string on port `6543` (`?pgbouncer=true`).
+### 1. Configure Supabase
 
-### Step 2: Push to GitHub / GitLab / Bitbucket
-Initialize a Git repository and push your project:
+Create a Supabase PostgreSQL project. Keep the pooled connection string in `DATABASE_URL` and the direct connection string in `DIRECT_URL`. Configure both variables on Render, not in the repository.
+
+Run migrations and seed data from a machine with those variables in `.env`:
+
 ```bash
-git init
-git add .
-git commit -m "feat: whiz barbershop for vercel"
-git branch -M main
-git remote add origin https://github.com/<your-username>/whiz-barbershop.git
-git push -u origin main
-```
-
-### Step 3: Import into Vercel
-1. Log in to [Vercel](https://vercel.com) and click **"Add New..." > "Project"**.
-2. Select your `whiz-barbershop` repository.
-3. Framework Preset: **Vite** (automatically detected).
-4. Root Directory: `./` (leave default).
-5. In **Environment Variables**, add:
-   - `DATABASE_URL`: Your pooled database connection string.
-   - `DIRECT_URL`: Your direct/unpooled connection string. Prisma requires this variable during the Vercel build; use the direct database endpoint for migrations.
-   - `JWT_SECRET`: A secure random string (at least 32 characters).
-   - `LOYALTY_POINTS_PER_KES`: `0.01`
-6. Click **Deploy**.
-
-### Step 4: Run Database Migrations and Seed
-Once your database is created, run the migrations and seed data locally against your hosted database:
-```bash
-# 1. Install dependencies locally
 npm install
-
-# 2. Set both hosted connection strings in .env, then deploy migrations:
 npx prisma migrate deploy
-
-# 3. Seed demo users and the 20 catalogue services:
 npm run db:seed
 ```
 
+### 2. Deploy the backend to Render
+
+Create a Render **Web Service** connected to this repository:
+
+- Build command: `npm install && npm run prisma:generate`
+- Start command: `npm start`
+- Add `DATABASE_URL`, `DIRECT_URL`, `JWT_SECRET`, `LOYALTY_POINTS_PER_KES`, and `ALLOWED_ORIGIN` environment variables.
+- Set `ALLOWED_ORIGIN` to the Vercel frontend URL.
+
+### 3. Deploy the frontend to Vercel
+
+1. Log in to [Vercel](https://vercel.com) and click **"Add New..." > "Project"**.
+2. Select the repository.
+3. Framework Preset: **Vite** (automatically detected).
+4. Root Directory: `./` (leave default).
+5. In **Environment Variables**, add:
+   - `VITE_API_URL`: The Render API URL, for example `https://your-service.onrender.com/api`.
+6. Click **Deploy**.
+
 ### Environment variable checklist
 
-Set these variables in the Vercel project for all environments that should run the app:
+Set these variables on Render:
 
-- `DATABASE_URL`: pooled PostgreSQL connection string for serverless requests.
-- `DIRECT_URL`: direct PostgreSQL connection string for Prisma migrations and build-time validation.
+- `DATABASE_URL`: Supabase pooled PostgreSQL connection string.
+- `DIRECT_URL`: Supabase direct PostgreSQL connection string.
 - `JWT_SECRET`: a unique random value of at least 32 characters.
+- `ALLOWED_ORIGIN`: the Vercel frontend URL.
+
+Set this variable on Vercel:
+
+- `VITE_API_URL`: the Render API URL ending in `/api`.
 
 Do not commit `.env`; it is ignored by Git. Vercel environment variables are configured in Project Settings rather than in the repository.
 

@@ -45,7 +45,11 @@ app.addContentTypeParser("application/json", {}, (req, payload, done) => {
   });
 });
 
-await app.register(cors, { origin: true });
+await app.register(cors, {
+  origin: process.env.ALLOWED_ORIGIN
+    ? process.env.ALLOWED_ORIGIN.split(",").map((origin) => origin.trim())
+    : true
+});
 await app.register(sensible);
 await app.register(jwt, {
   secret: JWT_SECRET,
