@@ -13,6 +13,7 @@ enum Role {
   ADMIN
   MANAGER
   BARBER
+  SHAMPOO_ASSISTANT
 }
 
 enum UserStatus {

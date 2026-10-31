@@ -62,7 +62,7 @@ async function main() {
     create: {
       username: "shampoo",
       passwordHash: shampooHash,
-      role: Role.BARBER,
+      role: Role.SHAMPOO_ASSISTANT,
       status: UserStatus.APPROVED,
       fullName: "Shampoo Assistant"
     }

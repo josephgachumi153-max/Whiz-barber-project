@@ -106,7 +106,8 @@ app.get("/api", async () => ({
 app.post("/api/auth/login", async (req, reply) => {
   const schema = z.object({
     username: z.string().min(1),
-    password: z.string().min(1)
+    password: z.string().min(1),
+    role: z.enum(["ADMIN", "MANAGER", "BARBER", "SHAMPOO_ASSISTANT"])
   });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) {
@@ -119,6 +120,10 @@ app.post("/api/auth/login", async (req, reply) => {
 
   if (!user || !(await verifyPassword(parsed.data.password, user.passwordHash))) {
     return reply.code(401).send({ message: "Invalid credentials" });
+  }
+
+  if (user.role !== parsed.data.role) {
+    return reply.code(401).send({ message: "Selected account type does not match this account" });
   }
 
   if (!user.isActive || user.status !== "APPROVED") {
@@ -302,13 +307,15 @@ app.get("/api/barbers/available", { preHandler: auth }, async () => {
 app.get("/api/orders", { preHandler: auth }, async (req) => {
   // Barbers are scoped by their Barber profile, not by managerId.
   const managerId =
-    req.user.role === Role.ADMIN || req.user.role === Role.BARBER
+    req.user.role === Role.ADMIN || req.user.role === Role.BARBER || req.user.role === Role.SHAMPOO_ASSISTANT
       ? undefined
       : req.user.sub;
 
   const where: Prisma.ServiceOrderWhereInput = {
     ...(managerId ? { managerId } : {}),
-    ...(req.user.role === Role.BARBER ? { barber: { userId: req.user.sub } } : {})
+    ...((req.user.role === Role.BARBER || req.user.role === Role.SHAMPOO_ASSISTANT)
+      ? { barber: { userId: req.user.sub } }
+      : {})
   };
 
   return prisma.serviceOrder.findMany({
@@ -384,12 +391,12 @@ app.post("/api/orders", { preHandler: [auth, role(Role.ADMIN, Role.MANAGER)] }, 
   }
 });
 
-app.post("/api/orders/:id/start", { preHandler: [auth, role(Role.BARBER, Role.ADMIN)] }, async (req, reply) => {
+app.post("/api/orders/:id/start", { preHandler: [auth, role(Role.BARBER, Role.SHAMPOO_ASSISTANT, Role.ADMIN)] }, async (req, reply) => {
   const { id } = idSchema.parse(req.params);
   const order = await prisma.serviceOrder.findUnique({ where: { id } });
   if (!order) return reply.code(404).send({ message: "Order not found" });
 
-  if (req.user.role === Role.BARBER) {
+  if (req.user.role === Role.BARBER || req.user.role === Role.SHAMPOO_ASSISTANT) {
     const barber = await prisma.barber.findUnique({ where: { userId: req.user.sub } });
     if (!barber || barber.id !== order.barberId) {
       return reply.code(403).send({ message: "Not your order" });
@@ -406,7 +413,7 @@ app.post("/api/orders/:id/start", { preHandler: [auth, role(Role.BARBER, Role.AD
   });
 });
 
-app.post("/api/orders/:id/complete", { preHandler: [auth, role(Role.BARBER, Role.ADMIN)] }, async (req, reply) => {
+app.post("/api/orders/:id/complete", { preHandler: [auth, role(Role.BARBER, Role.SHAMPOO_ASSISTANT, Role.ADMIN)] }, async (req, reply) => {
   const { id } = idSchema.parse(req.params);
   const order = await prisma.serviceOrder.findUnique({
     where: { id },
@@ -414,7 +421,7 @@ app.post("/api/orders/:id/complete", { preHandler: [auth, role(Role.BARBER, Role
   });
   if (!order) return reply.code(404).send({ message: "Order not found" });
 
-  if (req.user.role === Role.BARBER) {
+  if (req.user.role === Role.BARBER || req.user.role === Role.SHAMPOO_ASSISTANT) {
     const barber = await prisma.barber.findUnique({ where: { userId: req.user.sub } });
     if (!barber || barber.id !== order.barberId) {
       return reply.code(403).send({ message: "Not your order" });

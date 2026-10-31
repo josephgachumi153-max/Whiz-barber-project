@@ -19,7 +19,7 @@ type User = {
   id: string;
   username: string;
   fullName?: string;
-  role: "ADMIN" | "MANAGER" | "BARBER";
+  role: "ADMIN" | "MANAGER" | "BARBER" | "SHAMPOO_ASSISTANT";
 };
 
 type Customer = {
@@ -84,6 +84,7 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [username, setUsername] = useState("manager");
   const [password, setPassword] = useState("Manager@12345");
+  const [accountType, setAccountType] = useState<User["role"]>("MANAGER");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [section, setSection] = useState("Overview");
@@ -183,7 +184,7 @@ export default function App() {
       const result = await fetch(`${API}/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password })
+        body: JSON.stringify({ username, password, role: accountType })
       });
       const data = await result.json();
       if (!result.ok) throw new Error(data.message || "Login failed");
@@ -306,6 +307,15 @@ export default function App() {
             daily sales.
           </p>
           <form onSubmit={login} className="stack">
+            <label>
+              Account type
+              <select value={accountType} onChange={(e) => setAccountType(e.target.value as User["role"])}>
+                <option value="ADMIN">Admin</option>
+                <option value="MANAGER">Manager</option>
+                <option value="BARBER">Barber</option>
+                <option value="SHAMPOO_ASSISTANT">Shampoo Assistant</option>
+              </select>
+            </label>
             <label>
               Username
               <input
@@ -658,7 +668,7 @@ export default function App() {
                   Walk-in service lifecycle from assignment to completion.
                 </p>
               </div>
-              {user?.role !== "BARBER" && (
+              {user?.role !== "BARBER" && user?.role !== "SHAMPOO_ASSISTANT" && (
                 <button className="primary" onClick={() => setShowOrder(true)}>
                   <Plus size={17} /> New order
                 </button>
@@ -997,7 +1007,7 @@ function OrderTable({
               <td>
                 <div className="row-actions">
                   {o.status === "ASSIGNED" &&
-                    (user?.role === "ADMIN" || user?.role === "BARBER") && (
+                    (user?.role === "ADMIN" || user?.role === "BARBER" || user?.role === "SHAMPOO_ASSISTANT") && (
                       <button
                         className="mini-action"
                         onClick={() => mutate(`/orders/${o.id}/start`)}
@@ -1006,7 +1016,7 @@ function OrderTable({
                       </button>
                     )}
                   {o.status === "IN_PROGRESS" &&
-                    (user?.role === "ADMIN" || user?.role === "BARBER") && (
+                    (user?.role === "ADMIN" || user?.role === "BARBER" || user?.role === "SHAMPOO_ASSISTANT") && (
                       <button
                         className="mini-action complete"
                         onClick={() => mutate(`/orders/${o.id}/complete`)}
