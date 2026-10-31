@@ -10,12 +10,12 @@ import { hashPassword, verifyPassword } from "./lib/auth.js";
 const app = Fastify({ logger: true });
 
 const PORT = Number(process.env.PORT ?? 3000);
-const JWT_SECRET = process.env.JWT_SECRET ??
-  (process.env.NODE_ENV === "production"
-    ? (() => {
-        throw new Error("JWT_SECRET must be configured in production");
-      })()
-    : "development-only-secret-change-before-deploy");
+const isProduction = process.env.NODE_ENV === "production";
+const configuredJwtSecret = process.env.JWT_SECRET;
+if (isProduction && (!configuredJwtSecret || configuredJwtSecret.length < 32)) {
+  throw new Error("JWT_SECRET must be at least 32 characters in production");
+}
+const JWT_SECRET = configuredJwtSecret ?? "development-only-secret-change-before-deploy";
 const LOYALTY_RATE = Number(process.env.LOYALTY_POINTS_PER_KES ?? 0.01);
 
 declare module "@fastify/jwt" {

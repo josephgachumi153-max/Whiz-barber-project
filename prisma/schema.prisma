@@ -45,11 +45,14 @@ model User {
   fullName     String?
   email        String?
   createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
   barber       Barber?
   customers    Customer[]     @relation("ManagerCustomers")
   services     Service[]      @relation("ManagerServices")
   orders       ServiceOrder[] @relation("ManagerOrders")
   transactions Transaction[]  @relation("ManagerTransactions")
+
+  @@index([role, status, isActive])
 }
 
 model Barber {
@@ -63,6 +66,9 @@ model Barber {
   orders         ServiceOrder[]
   transactions   Transaction[]
   createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@index([isActive, name])
 }
 
 model Customer {
@@ -79,8 +85,10 @@ model Customer {
   manager       User           @relation("ManagerCustomers", fields: [managerId], references: [id])
   orders        ServiceOrder[]
   transactions  Transaction[]
+  updatedAt     DateTime       @updatedAt
 
   @@index([managerId, isActive])
+  @@index([phone])
 }
 
 model Service {
@@ -95,6 +103,7 @@ model Service {
   manager         User           @relation("ManagerServices", fields: [managerId], references: [id])
   orders          ServiceOrder[]
   transactions    Transaction[]
+  updatedAt       DateTime       @updatedAt
 
   @@unique([managerId, name])
   @@index([managerId, isActive])
@@ -126,6 +135,7 @@ model ServiceOrder {
 
   @@index([managerId, status, createdAt])
   @@index([barberId, status])
+  @@index([customerId, createdAt])
 }
 
 model Transaction {
@@ -140,6 +150,7 @@ model Transaction {
   paymentMethod    PaymentMethod
   reference        String?
   createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
   order            ServiceOrder  @relation(fields: [orderId], references: [id])
   manager          User          @relation("ManagerTransactions", fields: [managerId], references: [id])
   customer         Customer      @relation(fields: [customerId], references: [id])
@@ -147,4 +158,5 @@ model Transaction {
   service          Service       @relation(fields: [serviceId], references: [id])
 
   @@index([managerId, createdAt])
+  @@index([barberId, createdAt])
 }
