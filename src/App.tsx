@@ -296,7 +296,7 @@ export default function App() {
           <div className="brand-mark">
             <Scissors size={25} />
           </div>
-          <p className="eyebrow">WHIZ BARBERSHOP</p>
+          <p className="eyebrow">WHIZ BARBER</p>
           <h1>
             Run your shop.
             <br />
@@ -340,17 +340,6 @@ export default function App() {
               {loading ? "Signing in…" : "Sign in"}
             </button>
           </form>
-          <div className="demo-hint">
-            <b>Demo login</b>
-            <br />
-            Manager: manager / Manager@12345
-            <br />
-            Admin: admin / Admin@12345
-            <br />
-            Barber: barber / Barber@12345
-            <br />
-            Shampoo: shampoo / Shampoo@12345
-          </div>
         </div>
       </div>
     );
