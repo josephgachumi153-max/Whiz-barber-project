@@ -435,7 +435,7 @@ app.delete("/api/inventory/:id", { preHandler: [auth, role(Role.ADMIN, Role.MANA
 app.get("/api/barbers", { preHandler: auth }, async () => {
   return prisma.barber.findMany({
     where: { isActive: true },
-    include: { user: { select: { username: true } } },
+    include: { user: { select: { id: true, username: true } } },
     orderBy: { name: "asc" }
   });
 });
