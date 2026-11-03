@@ -219,6 +219,13 @@ app.get("/api/audit-logs", { preHandler: [auth, role(Role.ADMIN)] }, async () =>
   });
 });
 
+app.get("/api/auth/users", { preHandler: [auth, role(Role.ADMIN)] }, async () => {
+  return prisma.user.findMany({
+    select: { id: true, username: true, fullName: true, role: true, status: true, isActive: true },
+    orderBy: { username: "asc" }
+  });
+});
+
 app.post("/api/auth/users/:id/deactivate", { preHandler: [auth, role(Role.ADMIN)] }, async (req, reply) => {
   const { id } = idSchema.parse(req.params);
   const user = await prisma.user.findUnique({ where: { id } });
