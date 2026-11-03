@@ -85,6 +85,17 @@ type InventoryItem = {
 
 const API = (import.meta.env.VITE_API_URL || "/api").replace(/\/$/, "");
 
+async function readResponseData(response: Response) {
+  const text = await response.text();
+  if (!text) return {};
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { message: text };
+  }
+}
+
 function money(v: number | string) {
   return `KES ${Number(v).toLocaleString("en-KE", {
     minimumFractionDigits: 0,
@@ -151,7 +162,7 @@ export default function App() {
         ...(options.headers || {})
       }
     });
-    const data = await response.json().catch(() => ({}));
+    const data = await readResponseData(response);
     if (!response.ok) {
       throw new Error(data.message || `Request failed (${response.status})`);
     }
@@ -227,7 +238,7 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password, role: accountType })
       });
-      const data = await result.json();
+      const data = await readResponseData(result);
       if (!result.ok) throw new Error(data.message || "Login failed");
       localStorage.setItem("whiz_token", data.token);
       setToken(data.token);
@@ -374,13 +385,7 @@ export default function App() {
           <p className="eyebrow">WHIZ BARBER</p>
           <h1>
             Whiz Barber.
-            <br />
-            <span>Run your shop.</span>
           </h1>
-          <p className="muted">
-            A simple command centre for walk-in service, barber allocation, and
-            daily sales.
-          </p>
           <form onSubmit={login} className="stack">
             <label>
               Account type
