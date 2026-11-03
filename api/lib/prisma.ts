@@ -8,6 +8,6 @@ export const prisma =
     log: process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"]
   });
 
-if (process.env.NODE_ENV !== "production") {
-  globalForPrisma.prisma = prisma;
-}
+// Vercel reuses warm serverless runtimes. Keep one client per runtime so
+// repeated requests do not create a new database pool and exhaust Supabase.
+globalForPrisma.prisma = prisma;
