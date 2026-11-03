@@ -709,9 +709,11 @@ export default function App() {
                   Prices and commissions are snapshotted when an order is created.
                 </p>
               </div>
-              <button className="primary" onClick={() => setShowService(true)}>
-                <Plus size={17} /> Add service
-              </button>
+              {(user?.role === "ADMIN" || user?.role === "MANAGER") && (
+                <button className="primary" onClick={() => setShowService(true)}>
+                  <Plus size={17} /> Add service
+                </button>
+              )}
             </div>
             <div className="service-grid">
               {services.map((s) => (
@@ -727,14 +729,19 @@ export default function App() {
                       ? "Staff default"
                       : `${s.commissionPct}% commission`}
                   </p>
-                  <button
-                    className="text-btn danger-text"
-                    onClick={() => mutate(`/services/${s.id}`, "DELETE")}
-                  >
-                    Deactivate service
-                  </button>
+                  {(user?.role === "ADMIN" || user?.role === "MANAGER") && (
+                    <button
+                      className="text-btn danger-text"
+                      onClick={() => mutate(`/services/${s.id}`, "DELETE")}
+                    >
+                      Delete service
+                    </button>
+                  )}
                 </div>
               ))}
+              {services.length === 0 && (
+                <p className="empty">No services yet. Add your first service.</p>
+              )}
             </div>
           </section>
         )}
