@@ -5,8 +5,9 @@ generator client {
 
 datasource db {
   provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  // Vercel's Supabase integration provisions these names automatically.
+  url       = env("POSTGRES_PRISMA_URL")
+  directUrl = env("POSTGRES_URL_NON_POOLING")
 }
 
 enum Role {
@@ -35,6 +36,12 @@ enum PaymentMethod {
   OTHER
 }
 
+enum InventoryMovementType {
+  RECEIPT
+  ISSUE
+  ADJUSTMENT
+}
+
 model User {
   id           String         @id @default(cuid())
   username     String         @unique
@@ -51,6 +58,8 @@ model User {
   services     Service[]      @relation("ManagerServices")
   orders       ServiceOrder[] @relation("ManagerOrders")
   transactions Transaction[]  @relation("ManagerTransactions")
+  inventoryItems InventoryItem[]
+  inventoryMovements InventoryMovement[]
 
   @@index([role, status, isActive])
 }
@@ -159,4 +168,38 @@ model Transaction {
 
   @@index([managerId, createdAt])
   @@index([barberId, createdAt])
+}
+
+model InventoryItem {
+  id           String              @id @default(cuid())
+  managerId    String
+  name         String
+  sku          String?
+  unit         String              @default("unit")
+  quantity     Decimal             @default(0) @db.Decimal(12,2)
+  reorderLevel Decimal             @default(0) @db.Decimal(12,2)
+  costPrice    Decimal?            @db.Decimal(12,2)
+  isActive     Boolean             @default(true)
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  manager      User                @relation(fields: [managerId], references: [id])
+  movements    InventoryMovement[]
+
+  @@unique([managerId, name])
+  @@index([managerId, isActive])
+}
+
+model InventoryMovement {
+  id          String                @id @default(cuid())
+  inventoryId String
+  managerId   String
+  type        InventoryMovementType
+  quantity    Decimal               @db.Decimal(12,2)
+  reason      String?
+  createdAt   DateTime              @default(now())
+  inventory   InventoryItem         @relation(fields: [inventoryId], references: [id])
+  manager     User                  @relation(fields: [managerId], references: [id])
+
+  @@index([inventoryId, createdAt])
+  @@index([managerId, createdAt])
 }

@@ -2,7 +2,7 @@ import Fastify, { FastifyRequest, FastifyReply } from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
 import sensible from "@fastify/sensible";
-import { Role, OrderStatus, PaymentMethod, Prisma } from "@prisma/client";
+import { Role, OrderStatus, PaymentMethod, InventoryMovementType, Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "./lib/prisma.js";
 import { hashPassword, verifyPassword } from "./lib/auth.js";
@@ -90,12 +90,30 @@ const serviceSchema = z.object({
   durationMinutes: z.coerce.number().int().min(1).max(600).default(30)
 });
 
+const inventorySchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  sku: z.string().trim().max(50).optional(),
+  unit: z.string().trim().min(1).max(30).default("unit"),
+  quantity: z.coerce.number().min(0).default(0),
+  reorderLevel: z.coerce.number().min(0).default(0),
+  costPrice: z.coerce.number().min(0).optional()
+});
+
+const inventoryAdjustmentSchema = z.object({
+  quantity: z.coerce.number().refine((value) => value !== 0, "Quantity cannot be zero"),
+  type: z.nativeEnum(InventoryMovementType).default(InventoryMovementType.ADJUSTMENT),
+  reason: z.string().trim().max(300).optional()
+});
+
 const orderSchema = z.object({
-  customerId: z.string().min(1),
+  customerId: z.string().min(1).optional(),
+  newCustomer: customerSchema.optional(),
   serviceId: z.string().min(1),
   barberId: z.string().min(1),
   paymentMethod: z.nativeEnum(PaymentMethod).default(PaymentMethod.CASH),
   notes: z.string().max(500).optional()
+}).refine((value) => Boolean(value.customerId) !== Boolean(value.newCustomer), {
+  message: "Choose an existing customer or provide a new customer"
 });
 
 const idSchema = z.object({ id: z.string().min(1) });
@@ -289,6 +307,65 @@ app.delete("/api/services/:id", { preHandler: [auth, role(Role.ADMIN, Role.MANAG
   return { success: true };
 });
 
+app.get("/api/inventory", { preHandler: auth }, async (req) => {
+  const managerId = managerIdFor(req);
+  return prisma.inventoryItem.findMany({
+    where: { ...(managerId ? { managerId } : {}), isActive: true },
+    include: { movements: { orderBy: { createdAt: "desc" }, take: 10 } },
+    orderBy: { name: "asc" }
+  });
+});
+
+app.post("/api/inventory", { preHandler: [auth, role(Role.ADMIN, Role.MANAGER)] }, async (req, reply) => {
+  const parsed = inventorySchema.safeParse(req.body);
+  if (!parsed.success) return reply.code(400).send({ message: "Invalid inventory item", issues: parsed.error.flatten() });
+  const managerId = req.user.role === Role.ADMIN ? (req.body as any).managerId : req.user.sub;
+  if (!managerId) return reply.code(400).send({ message: "Admin must supply managerId" });
+  const manager = await prisma.user.findUnique({ where: { id: managerId } });
+  if (!manager || manager.role !== Role.MANAGER) return reply.code(400).send({ message: "Invalid managerId" });
+  try {
+    const item = await prisma.$transaction(async (tx) => {
+      const created = await tx.inventoryItem.create({
+        data: { ...parsed.data, sku: parsed.data.sku || null, costPrice: parsed.data.costPrice ?? null, managerId }
+      });
+      if (parsed.data.quantity > 0) {
+        await tx.inventoryMovement.create({
+          data: { inventoryId: created.id, managerId, type: InventoryMovementType.RECEIPT, quantity: parsed.data.quantity, reason: "Opening balance" }
+        });
+      }
+      return created;
+    });
+    return reply.code(201).send(item);
+  } catch (e) {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") return reply.code(409).send({ message: "You already have this inventory item" });
+    throw e;
+  }
+});
+
+app.post("/api/inventory/:id/adjust", { preHandler: [auth, role(Role.ADMIN, Role.MANAGER)] }, async (req, reply) => {
+  const { id } = idSchema.parse(req.params);
+  const parsed = inventoryAdjustmentSchema.safeParse(req.body);
+  if (!parsed.success) return reply.code(400).send({ message: "Invalid inventory adjustment", issues: parsed.error.flatten() });
+  const item = await prisma.inventoryItem.findUnique({ where: { id } });
+  if (!item || !item.isActive) return reply.code(404).send({ message: "Inventory item not found" });
+  if (req.user.role !== Role.ADMIN && item.managerId !== req.user.sub) return reply.code(403).send({ message: "Not your record" });
+  if (Number(item.quantity) + parsed.data.quantity < 0) return reply.code(400).send({ message: "Stock cannot go below zero" });
+  return prisma.$transaction(async (tx) => {
+    const updated = await tx.inventoryItem.update({ where: { id }, data: { quantity: { increment: parsed.data.quantity } } });
+    await tx.inventoryMovement.create({ data: { inventoryId: id, managerId: item.managerId, ...parsed.data } });
+    return updated;
+  });
+});
+
+app.delete("/api/inventory/:id", { preHandler: [auth, role(Role.ADMIN, Role.MANAGER)] }, async (req, reply) => {
+  const { id } = idSchema.parse(req.params);
+  const item = await prisma.inventoryItem.findUnique({ where: { id } });
+  if (!item) return reply.code(404).send({ message: "Inventory item not found" });
+  if (req.user.role !== Role.ADMIN && item.managerId !== req.user.sub) return reply.code(403).send({ message: "Not your record" });
+  await prisma.inventoryItem.update({ where: { id }, data: { isActive: false } });
+  return { success: true };
+});
+
 app.get("/api/barbers", { preHandler: auth }, async () => {
   return prisma.barber.findMany({
     where: { isActive: true },
@@ -340,14 +417,16 @@ app.post("/api/orders", { preHandler: [auth, role(Role.ADMIN, Role.MANAGER)] }, 
   const managerId = req.user.role === Role.ADMIN ? (req.body as any).managerId : req.user.sub;
   if (!managerId) return reply.code(400).send({ message: "Admin must supply managerId" });
 
-  const [customer, service, barber] = await Promise.all([
-    prisma.customer.findFirst({
-      where: {
-        id: input.customerId,
-        isActive: true,
-        ...(req.user.role === Role.ADMIN ? {} : { managerId })
-      }
-    }),
+  const [existingCustomer, service, barber] = await Promise.all([
+    input.customerId
+      ? prisma.customer.findFirst({
+          where: {
+            id: input.customerId,
+            isActive: true,
+            ...(req.user.role === Role.ADMIN ? {} : { managerId })
+          }
+        })
+      : Promise.resolve(null),
     prisma.service.findFirst({
       where: {
         id: input.serviceId,
@@ -358,7 +437,9 @@ app.post("/api/orders", { preHandler: [auth, role(Role.ADMIN, Role.MANAGER)] }, 
     prisma.barber.findFirst({ where: { id: input.barberId, isActive: true } })
   ]);
 
-  if (!customer) return reply.code(404).send({ message: "Active customer not found in your book" });
+  if (!input.newCustomer && !existingCustomer) {
+    return reply.code(404).send({ message: "Active customer not found in your book" });
+  }
   if (!service) return reply.code(404).send({ message: "Active service not found in your catalogue" });
   if (!barber) return reply.code(404).send({ message: "Barber not found" });
 
@@ -370,21 +451,36 @@ app.post("/api/orders", { preHandler: [auth, role(Role.ADMIN, Role.MANAGER)] }, 
   const commission = Math.round(price * pct) / 100;
 
   try {
-    const order = await prisma.serviceOrder.create({
-      data: {
-        managerId,
-        customerId: customer.id,
-        serviceId: service.id,
-        barberId: barber.id,
-        servicePrice: price,
-        commissionAmt: commission,
-        paymentMethod: input.paymentMethod,
-        notes: input.notes
-      },
-      include: { customer: true, service: true, barber: true }
-    });
+    const order = await prisma.$transaction(async (tx) => {
+      const activeOrder = await tx.serviceOrder.findFirst({
+        where: { barberId: barber.id, status: { in: [OrderStatus.ASSIGNED, OrderStatus.IN_PROGRESS] } },
+        select: { id: true }
+      });
+      if (activeOrder) throw new Error("BARBER_BUSY");
+      const customer = input.newCustomer
+        ? await tx.customer.create({
+            data: { ...input.newCustomer, email: input.newCustomer.email || null, managerId }
+          })
+        : existingCustomer!;
+      return tx.serviceOrder.create({
+        data: {
+          managerId,
+          customerId: customer.id,
+          serviceId: service.id,
+          barberId: barber.id,
+          servicePrice: price,
+          commissionAmt: commission,
+          paymentMethod: input.paymentMethod,
+          notes: input.notes
+        },
+        include: { customer: true, service: true, barber: true }
+      });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     return reply.code(201).send(order);
   } catch (e) {
+    if (e instanceof Error && e.message === "BARBER_BUSY") {
+      return reply.code(409).send({ message: `Barber "${barber.name}" is busy` });
+    }
     if (
       e instanceof Prisma.PrismaClientKnownRequestError &&
       (e.code === "P2002" || e.code === "P2034")
@@ -393,6 +489,22 @@ app.post("/api/orders", { preHandler: [auth, role(Role.ADMIN, Role.MANAGER)] }, 
     }
     throw e;
   }
+});
+
+app.post("/api/orders/:id/reassign", { preHandler: [auth, role(Role.MANAGER, Role.ADMIN)] }, async (req, reply) => {
+  const { id } = idSchema.parse(req.params);
+  const parsed = z.object({ barberId: z.string().min(1) }).safeParse(req.body);
+  if (!parsed.success) return reply.code(400).send({ message: "A barberId is required" });
+  const order = await prisma.serviceOrder.findUnique({ where: { id }, include: { service: true } });
+  if (!order) return reply.code(404).send({ message: "Order not found" });
+  if (req.user.role === Role.MANAGER && order.managerId !== req.user.sub) return reply.code(403).send({ message: "Not your record" });
+  if (order.status !== OrderStatus.ASSIGNED) return reply.code(400).send({ message: "Only assigned orders can be reassigned" });
+  const barber = await prisma.barber.findFirst({ where: { id: parsed.data.barberId, isActive: true } });
+  if (!barber) return reply.code(404).send({ message: "Barber not found" });
+  const active = await prisma.serviceOrder.findFirst({ where: { barberId: barber.id, status: { in: [OrderStatus.ASSIGNED, OrderStatus.IN_PROGRESS] }, NOT: { id } } });
+  if (active) return reply.code(409).send({ message: `Barber "${barber.name}" is busy` });
+  const pct = order.service.commissionPct !== null ? Number(order.service.commissionPct) : Number(barber.commissionPct);
+  return prisma.serviceOrder.update({ where: { id }, data: { barberId: barber.id, commissionAmt: Math.round(Number(order.servicePrice) * pct) / 100 }, include: { customer: true, service: true, barber: true } });
 });
 
 app.post("/api/orders/:id/start", { preHandler: [auth, role(Role.BARBER, Role.SHAMPOO_ASSISTANT, Role.ADMIN)] }, async (req, reply) => {
@@ -498,7 +610,7 @@ app.post("/api/orders/:id/cancel", { preHandler: [auth, role(Role.MANAGER, Role.
     return reply.code(403).send({ message: "Not your record" });
   }
 
-  if (![OrderStatus.ASSIGNED, OrderStatus.IN_PROGRESS].includes(order.status)) {
+  if (order.status !== OrderStatus.ASSIGNED && order.status !== OrderStatus.IN_PROGRESS) {
     return reply.code(400).send({ message: "Order already closed" });
   }
 
@@ -552,7 +664,9 @@ app.setErrorHandler((error, _req, reply) => {
   app.log.error(error);
   const status = (error as any).statusCode;
   if (status && status >= 400 && status < 500) {
-    return reply.code(status).send({ message: error.message });
+    return reply.code(status).send({
+      message: error instanceof Error ? error.message : "Request failed"
+    });
   }
   return reply.code(500).send({ message: "Internal server error" });
 });

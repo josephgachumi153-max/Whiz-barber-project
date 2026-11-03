@@ -789,6 +789,34 @@ td b {
   padding: 12px;
 }
 
+.password-control {
+  position: relative;
+}
+
+.password-control input {
+  width: 100%;
+  padding-right: 42px;
+}
+
+.password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border: 0;
+  background: transparent;
+  color: #7c8799;
+  cursor: pointer;
+}
+
+.password-toggle:hover {
+  color: #162238;
+}
+
 .login-card .primary {
   padding: 13px;
 }

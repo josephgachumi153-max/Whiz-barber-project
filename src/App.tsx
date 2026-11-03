@@ -12,7 +12,10 @@ import {
   CheckCircle2,
   Play,
   XCircle,
-  Menu
+  Menu,
+  Eye,
+  EyeOff,
+  Package
 } from "lucide-react";
 
 type User = {
@@ -70,6 +73,16 @@ type Sale = {
   paymentMethod?: string;
 };
 
+type InventoryItem = {
+  id: string;
+  name: string;
+  sku?: string | null;
+  unit: string;
+  quantity: string | number;
+  reorderLevel: string | number;
+  costPrice?: string | number | null;
+};
+
 const API = (import.meta.env.VITE_API_URL || "/api").replace(/\/$/, "");
 
 function money(v: number | string) {
@@ -84,6 +97,7 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [username, setUsername] = useState("manager");
   const [password, setPassword] = useState("Manager@12345");
+  const [showPassword, setShowPassword] = useState(false);
   const [accountType, setAccountType] = useState<User["role"]>("MANAGER");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -96,6 +110,7 @@ export default function App() {
   const [available, setAvailable] = useState<Barber[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
+  const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [dashboard, setDashboard] = useState({
     customers: 0,
     services: 0,
@@ -115,9 +130,17 @@ export default function App() {
   const [serviceCommission, setServiceCommission] = useState("35");
 
   const [orderCustomer, setOrderCustomer] = useState("");
+  const [newOrderCustomerName, setNewOrderCustomerName] = useState("");
+  const [newOrderCustomerPhone, setNewOrderCustomerPhone] = useState("");
   const [orderService, setOrderService] = useState("");
   const [orderBarber, setOrderBarber] = useState("");
   const [payment, setPayment] = useState("CASH");
+  const [showInventory, setShowInventory] = useState(false);
+  const [inventoryName, setInventoryName] = useState("");
+  const [inventoryUnit, setInventoryUnit] = useState("unit");
+  const [inventoryQuantity, setInventoryQuantity] = useState("0");
+  const [inventoryReorderLevel, setInventoryReorderLevel] = useState("0");
+  const [inventoryCostPrice, setInventoryCostPrice] = useState("");
 
   async function request(path: string, options: RequestInit = {}) {
     const response = await fetch(`${API}${path}`, {
@@ -138,7 +161,7 @@ export default function App() {
   async function load() {
     if (!token) return;
     try {
-      const [me, c, s, b, a, o, t, d] = await Promise.all([
+      const [me, c, s, b, a, o, t, d, i] = await Promise.all([
         request("/auth/me"),
         request("/customers"),
         request("/services"),
@@ -146,7 +169,8 @@ export default function App() {
         request("/barbers/available"),
         request("/orders"),
         request("/transactions"),
-        request("/dashboard")
+        request("/dashboard"),
+        request("/inventory")
       ]);
       setUser(me);
       setCustomers(c);
@@ -156,6 +180,7 @@ export default function App() {
       setOrders(o);
       setSales(t);
       setDashboard(d);
+      setInventory(i);
 
       if (!orderCustomer && c[0]) setOrderCustomer(c[0].id);
       if (!orderService && s[0]) setOrderService(s[0].id);
@@ -174,6 +199,22 @@ export default function App() {
     if (!token) return;
     const timer = setInterval(load, 10000);
     return () => clearInterval(timer);
+  }, [token]);
+
+  useEffect(() => {
+    if (!token) return;
+    const events = ["mousemove", "mousedown", "keydown", "scroll", "touchstart"];
+    let timeout: ReturnType<typeof setTimeout>;
+    const resetInactivityTimer = () => {
+      clearTimeout(timeout);
+      timeout = setTimeout(() => logout(), 5 * 60 * 1000);
+    };
+    events.forEach((event) => window.addEventListener(event, resetInactivityTimer));
+    resetInactivityTimer();
+    return () => {
+      clearTimeout(timeout);
+      events.forEach((event) => window.removeEventListener(event, resetInactivityTimer));
+    };
   }, [token]);
 
   async function login(e: FormEvent) {
@@ -248,16 +289,49 @@ export default function App() {
   async function submitOrder(e: FormEvent) {
     e.preventDefault();
     try {
+      const customer = orderCustomer === "__new__"
+        ? {
+            name: newOrderCustomerName,
+            phone: newOrderCustomerPhone || undefined
+          }
+        : undefined;
       await request("/orders", {
         method: "POST",
         body: JSON.stringify({
-          customerId: orderCustomer,
+          ...(customer ? { newCustomer: customer } : { customerId: orderCustomer }),
           serviceId: orderService,
           barberId: orderBarber,
           paymentMethod: payment
         })
       });
       setShowOrder(false);
+      setOrderCustomer("");
+      setNewOrderCustomerName("");
+      setNewOrderCustomerPhone("");
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function submitInventory(e: FormEvent) {
+    e.preventDefault();
+    try {
+      await request("/inventory", {
+        method: "POST",
+        body: JSON.stringify({
+          name: inventoryName,
+          unit: inventoryUnit,
+          quantity: Number(inventoryQuantity),
+          reorderLevel: Number(inventoryReorderLevel),
+          costPrice: inventoryCostPrice === "" ? undefined : Number(inventoryCostPrice)
+        })
+      });
+      setShowInventory(false);
+      setInventoryName("");
+      setInventoryQuantity("0");
+      setInventoryReorderLevel("0");
+      setInventoryCostPrice("");
       await load();
     } catch (e) {
       setError((e as Error).message);
@@ -281,7 +355,8 @@ export default function App() {
     { name: "Customers", icon: Users },
     { name: "Services", icon: BriefcaseBusiness },
     { name: "Orders", icon: ClipboardList },
-    { name: "Sales", icon: CircleDollarSign }
+    { name: "Sales", icon: CircleDollarSign },
+    { name: "Inventory", icon: Package }
   ];
 
   const activeOrders = orders.filter((o) =>
@@ -298,9 +373,9 @@ export default function App() {
           </div>
           <p className="eyebrow">WHIZ BARBER</p>
           <h1>
-            Run your shop.
+            Whiz Barber.
             <br />
-            <span>Know your numbers.</span>
+            <span>Run your shop.</span>
           </h1>
           <p className="muted">
             A simple command centre for walk-in service, barber allocation, and
@@ -327,13 +402,24 @@ export default function App() {
             </label>
             <label>
               Password
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                autoComplete="current-password"
-              />
+              <div className="password-control">
+                <input
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  autoComplete="current-password"
+                />
+                <button
+                  type="button"
+                  className="password-toggle"
+                  onClick={() => setShowPassword((visible) => !visible)}
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  title={showPassword ? "Hide password" : "Show password"}
+                >
+                  {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+                </button>
+              </div>
             </label>
             {error && <div className="alert">{error}</div>}
             <button className="primary full" disabled={loading}>
@@ -718,6 +804,57 @@ export default function App() {
           </section>
         )}
 
+        {section === "Inventory" && (
+          <section className="panel page-panel">
+            <div className="panel-head">
+              <div>
+                <h3>Inventory</h3>
+                <p className="muted">Track stock on hand and record receipts or issues.</p>
+              </div>
+              {(user?.role === "ADMIN" || user?.role === "MANAGER") && (
+                <button className="primary" onClick={() => setShowInventory(true)}>
+                  <Plus size={17} /> Add item
+                </button>
+              )}
+            </div>
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>Item</th><th>On hand</th><th>Reorder level</th><th>Cost</th><th>Status</th><th></th></tr></thead>
+                <tbody>
+                  {inventory.map((item) => {
+                    const low = Number(item.quantity) <= Number(item.reorderLevel);
+                    return (
+                      <tr key={item.id}>
+                        <td><b>{item.name}</b><small className="cell-sub">{item.sku || item.unit}</small></td>
+                        <td>{Number(item.quantity).toLocaleString()} {item.unit}</td>
+                        <td>{Number(item.reorderLevel).toLocaleString()} {item.unit}</td>
+                        <td>{item.costPrice == null ? "—" : money(item.costPrice)}</td>
+                        <td><span className={low ? "status busy" : "status available"}>{low ? "Low stock" : "In stock"}</span></td>
+                        <td className="row-actions">
+                          {(user?.role === "ADMIN" || user?.role === "MANAGER") && (
+                            <>
+                              <button className="text-btn" onClick={() => {
+                                const value = window.prompt(`Quantity to add to ${item.name}`, "1");
+                                if (value) mutate(`/inventory/${item.id}/adjust`, "POST", { quantity: Number(value), type: "RECEIPT", reason: "Stock received" });
+                              }}>Receive</button>
+                              <button className="text-btn" onClick={() => {
+                                const value = window.prompt(`Quantity to issue from ${item.name}`, "1");
+                                if (value) mutate(`/inventory/${item.id}/adjust`, "POST", { quantity: -Math.abs(Number(value)), type: "ISSUE", reason: "Stock issued" });
+                              }}>Issue</button>
+                              <button className="text-btn danger-text" onClick={() => mutate(`/inventory/${item.id}`, "DELETE")}>Deactivate</button>
+                            </>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              {inventory.length === 0 && <p className="empty">No inventory items yet.</p>}
+            </div>
+          </section>
+        )}
+
         <footer className="footer">
           <span>WHIZ BARBERSHOP MANAGEMENT SYSTEM</span>
           <span>Single location · Walk-in operations</span>
@@ -805,6 +942,22 @@ export default function App() {
         </Modal>
       )}
 
+      {showInventory && (
+        <Modal title="Add inventory item" close={() => setShowInventory(false)}>
+          <form className="stack" onSubmit={submitInventory}>
+            <label>Item name<input value={inventoryName} onChange={(e) => setInventoryName(e.target.value)} required autoFocus /></label>
+            <label>Unit<input value={inventoryUnit} onChange={(e) => setInventoryUnit(e.target.value)} required /></label>
+            <label>Opening quantity<input type="number" min="0" step="0.01" value={inventoryQuantity} onChange={(e) => setInventoryQuantity(e.target.value)} required /></label>
+            <label>Reorder level<input type="number" min="0" step="0.01" value={inventoryReorderLevel} onChange={(e) => setInventoryReorderLevel(e.target.value)} required /></label>
+            <label>Cost price (KES)<input type="number" min="0" step="0.01" value={inventoryCostPrice} onChange={(e) => setInventoryCostPrice(e.target.value)} /></label>
+            <div className="modal-actions">
+              <button type="button" className="secondary" onClick={() => setShowInventory(false)}>Cancel</button>
+              <button className="primary">Save item</button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
       {showOrder && (
         <Modal title="Create service order" close={() => setShowOrder(false)}>
           <form className="stack" onSubmit={submitOrder}>
@@ -820,6 +973,7 @@ export default function App() {
                 required
               >
                 <option value="">Select customer</option>
+                <option value="__new__">+ Create new customer</option>
                 {customers.map((c) => (
                   <option value={c.id} key={c.id}>
                     {c.name}
@@ -827,6 +981,27 @@ export default function App() {
                 ))}
               </select>
             </label>
+            {orderCustomer === "__new__" && (
+              <>
+                <label>
+                  New customer name
+                  <input
+                    value={newOrderCustomerName}
+                    onChange={(e) => setNewOrderCustomerName(e.target.value)}
+                    required
+                    autoFocus
+                  />
+                </label>
+                <label>
+                  Phone number
+                  <input
+                    value={newOrderCustomerPhone}
+                    onChange={(e) => setNewOrderCustomerPhone(e.target.value)}
+                    placeholder="07xx xxx xxx"
+                  />
+                </label>
+              </>
+            )}
             <label>
               Service
               <select
@@ -885,7 +1060,7 @@ export default function App() {
               <button
                 className="primary"
                 disabled={
-                  !available.length || !customers.length || !services.length
+                  !available.length || !orderCustomer || !orderService || !services.length
                 }
               >
                 Create order
