@@ -77,6 +77,32 @@ function role(...roles: Role[]) {
 const managerIdFor = (req: AuthedRequest) =>
   req.user.role === Role.ADMIN ? undefined : req.user.sub;
 
+async function writeAudit(input: {
+  actorUserId?: string;
+  action: string;
+  entityType: string;
+  entityId?: string;
+  beforeData?: unknown;
+  afterData?: unknown;
+  metadata?: unknown;
+}) {
+  try {
+    await prisma.auditLog.create({
+      data: {
+        actorUserId: input.actorUserId,
+        action: input.action,
+        entityType: input.entityType,
+        entityId: input.entityId,
+        beforeData: input.beforeData as Prisma.InputJsonValue | undefined,
+        afterData: input.afterData as Prisma.InputJsonValue | undefined,
+        metadata: input.metadata as Prisma.InputJsonValue | undefined
+      }
+    });
+  } catch (error) {
+    app.log.error(error, "Unable to write audit log");
+  }
+}
+
 const customerSchema = z.object({
   name: z.string().trim().min(1).max(100),
   phone: z.string().trim().max(30).optional(),
@@ -158,6 +184,14 @@ app.post("/api/auth/login", async (req, reply) => {
     role: user.role
   });
 
+  await writeAudit({
+    actorUserId: user.id,
+    action: "LOGIN",
+    entityType: "User",
+    entityId: user.id,
+    metadata: { username: user.username, role: user.role }
+  });
+
   return {
     token,
     user: {
@@ -175,6 +209,32 @@ app.get("/api/auth/me", { preHandler: auth }, async (req) => {
     select: { id: true, username: true, fullName: true, role: true }
   });
   return user;
+});
+
+app.get("/api/audit-logs", { preHandler: [auth, role(Role.ADMIN)] }, async () => {
+  return prisma.auditLog.findMany({
+    include: { actor: { select: { id: true, username: true, fullName: true, role: true } } },
+    orderBy: { createdAt: "desc" },
+    take: 200
+  });
+});
+
+app.post("/api/auth/users/:id/deactivate", { preHandler: [auth, role(Role.ADMIN)] }, async (req, reply) => {
+  const { id } = idSchema.parse(req.params);
+  const user = await prisma.user.findUnique({ where: { id } });
+  if (!user) return reply.code(404).send({ message: "User not found" });
+  if (user.id === req.user.sub) return reply.code(400).send({ message: "You cannot deactivate your own account" });
+
+  const updated = await prisma.user.update({
+    where: { id },
+    data: { isActive: false, status: "SUSPENDED" },
+    select: { id: true, username: true, fullName: true, role: true, isActive: true, status: true }
+  });
+  if (updated.role === Role.BARBER || updated.role === Role.SHAMPOO_ASSISTANT) {
+    await prisma.barber.updateMany({ where: { userId: id }, data: { isActive: false } });
+  }
+  await writeAudit({ actorUserId: req.user.sub, action: "DEACTIVATE", entityType: "User", entityId: id, beforeData: user, afterData: updated });
+  return updated;
 });
 
 app.post("/api/auth/managers", { preHandler: [auth, role(Role.ADMIN)] }, async (req, reply) => {
@@ -285,6 +345,7 @@ app.post("/api/services", { preHandler: [auth, role(Role.ADMIN, Role.MANAGER)] }
     const service = await prisma.service.create({
       data: { ...parsed.data, managerId: ownerId }
     });
+    await writeAudit({ actorUserId: req.user.sub, action: "CREATE", entityType: "Service", entityId: service.id, afterData: service });
     return reply.code(201).send(service);
   } catch (e) {
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
@@ -303,7 +364,8 @@ app.delete("/api/services/:id", { preHandler: [auth, role(Role.ADMIN, Role.MANAG
     return reply.code(403).send({ message: "Not your record" });
   }
 
-  await prisma.service.update({ where: { id }, data: { isActive: false } });
+  const updated = await prisma.service.update({ where: { id }, data: { isActive: false } });
+  await writeAudit({ actorUserId: req.user.sub, action: "DEACTIVATE", entityType: "Service", entityId: id, beforeData: row, afterData: updated });
   return { success: true };
 });
 
@@ -335,6 +397,7 @@ app.post("/api/inventory", { preHandler: [auth, role(Role.ADMIN, Role.MANAGER)] 
       }
       return created;
     });
+    await writeAudit({ actorUserId: req.user.sub, action: "CREATE", entityType: "InventoryItem", entityId: item.id, afterData: item });
     return reply.code(201).send(item);
   } catch (e) {
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") return reply.code(409).send({ message: "You already have this inventory item" });
@@ -350,11 +413,13 @@ app.post("/api/inventory/:id/adjust", { preHandler: [auth, role(Role.ADMIN, Role
   if (!item || !item.isActive) return reply.code(404).send({ message: "Inventory item not found" });
   if (req.user.role !== Role.ADMIN && item.managerId !== req.user.sub) return reply.code(403).send({ message: "Not your record" });
   if (Number(item.quantity) + parsed.data.quantity < 0) return reply.code(400).send({ message: "Stock cannot go below zero" });
-  return prisma.$transaction(async (tx) => {
+  const updated = await prisma.$transaction(async (tx) => {
     const updated = await tx.inventoryItem.update({ where: { id }, data: { quantity: { increment: parsed.data.quantity } } });
     await tx.inventoryMovement.create({ data: { inventoryId: id, managerId: item.managerId, ...parsed.data } });
     return updated;
   });
+  await writeAudit({ actorUserId: req.user.sub, action: "ADJUST", entityType: "InventoryItem", entityId: id, beforeData: item, afterData: updated, metadata: parsed.data });
+  return updated;
 });
 
 app.delete("/api/inventory/:id", { preHandler: [auth, role(Role.ADMIN, Role.MANAGER)] }, async (req, reply) => {
@@ -362,7 +427,8 @@ app.delete("/api/inventory/:id", { preHandler: [auth, role(Role.ADMIN, Role.MANA
   const item = await prisma.inventoryItem.findUnique({ where: { id } });
   if (!item) return reply.code(404).send({ message: "Inventory item not found" });
   if (req.user.role !== Role.ADMIN && item.managerId !== req.user.sub) return reply.code(403).send({ message: "Not your record" });
-  await prisma.inventoryItem.update({ where: { id }, data: { isActive: false } });
+  const updated = await prisma.inventoryItem.update({ where: { id }, data: { isActive: false } });
+  await writeAudit({ actorUserId: req.user.sub, action: "DEACTIVATE", entityType: "InventoryItem", entityId: id, beforeData: item, afterData: updated });
   return { success: true };
 });
 

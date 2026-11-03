@@ -15,7 +15,8 @@ import {
   Menu,
   Eye,
   EyeOff,
-  Package
+  Package,
+  ShieldCheck
 } from "lucide-react";
 
 type User = {
@@ -83,6 +84,16 @@ type InventoryItem = {
   costPrice?: string | number | null;
 };
 
+type AuditLog = {
+  id: string;
+  action: string;
+  entityType: string;
+  entityId?: string | null;
+  metadata?: Record<string, unknown> | null;
+  createdAt: string;
+  actor?: { username: string; fullName?: string | null; role: string } | null;
+};
+
 const API = (import.meta.env.VITE_API_URL || "/api").replace(/\/$/, "");
 
 async function readResponseData(response: Response) {
@@ -122,6 +133,7 @@ export default function App() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [dashboard, setDashboard] = useState({
     customers: 0,
     services: 0,
@@ -192,6 +204,15 @@ export default function App() {
       setSales(t);
       setDashboard(d);
       setInventory(i);
+      if (me.role === "ADMIN") {
+        try {
+          setAuditLogs(await request("/audit-logs"));
+        } catch {
+          setAuditLogs([]);
+        }
+      } else {
+        setAuditLogs([]);
+      }
 
       if (!orderCustomer && c[0]) setOrderCustomer(c[0].id);
       if (!orderService && s[0]) setOrderService(s[0].id);
@@ -367,7 +388,8 @@ export default function App() {
     { name: "Services", icon: BriefcaseBusiness },
     { name: "Orders", icon: ClipboardList },
     { name: "Sales", icon: CircleDollarSign },
-    { name: "Inventory", icon: Package }
+    { name: "Inventory", icon: Package },
+    ...(user?.role === "ADMIN" ? [{ name: "Admin Logs", icon: ShieldCheck }] : [])
   ];
 
   const activeOrders = orders.filter((o) =>
@@ -863,6 +885,34 @@ export default function App() {
                 </tbody>
               </table>
               {inventory.length === 0 && <p className="empty">No inventory items yet.</p>}
+            </div>
+          </section>
+        )}
+
+        {section === "Admin Logs" && user?.role === "ADMIN" && (
+          <section className="panel page-panel">
+            <div className="panel-head">
+              <div>
+                <h3>Admin audit history</h3>
+                <p className="muted">A persistent record of sign-ins and administrative changes.</p>
+              </div>
+              <span className="count-pill">{auditLogs.length} events</span>
+            </div>
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Record</th></tr></thead>
+                <tbody>
+                  {auditLogs.map((log) => (
+                    <tr key={log.id}>
+                      <td>{new Date(log.createdAt).toLocaleString()}</td>
+                      <td>{log.actor?.fullName || log.actor?.username || "System"}</td>
+                      <td><span className="tag">{log.action}</span></td>
+                      <td>{log.entityType}{log.entityId ? ` · ${log.entityId.slice(0, 8)}` : ""}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {auditLogs.length === 0 && <p className="empty">No audit events yet.</p>}
             </div>
           </section>
         )}
