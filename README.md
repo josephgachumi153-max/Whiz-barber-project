@@ -21,13 +21,15 @@ A walk-in barbershop management web app built with React 19, Vite, Fastify 5, Pr
 
 Create a Supabase PostgreSQL project and connect it to the Vercel project through the Supabase integration. Prisma uses Vercel's provisioned `POSTGRES_PRISMA_URL` for runtime queries and `POSTGRES_URL_NON_POOLING` for migrations.
 
-Run migrations and seed data from a machine with those variables in `.env`:
+Run migrations and bootstrap the first Admin from a secure machine with those variables in `.env`:
 
 ```bash
 npm install
 npx prisma migrate deploy
-npm run db:seed
+ADMIN_USERNAME=your-admin ADMIN_PASSWORD='use-a-unique-password-at-least-12-characters' npm run db:seed
 ```
+
+The production seeder creates or updates only the explicitly supplied Admin account. It does not create demo users, customers, barbers, or services. Create real staff, customers, services, and inventory through the application after signing in.
 
 ### 2. Deploy to Vercel
 
@@ -54,14 +56,9 @@ Do not commit `.env`; it is ignored by Git. Vercel environment variables are con
 
 ---
 
-## Demo Accounts
+## Production bootstrap
 
-| Role | Username | Password | Access & Capabilities |
-| :--- | :--- | :--- | :--- |
-| **Admin** | `admin` | `Admin@12345` | Global visibility across all managers and barbers |
-| **Manager** | `manager` | `Manager@12345` | Scoped customers, service catalogue, create/cancel orders |
-| **Barber** | `barber` | `Barber@12345` | Shared staff pool; start and complete assigned orders |
-| **Shampoo Assistant** | `shampoo` | `Shampoo@12345` | Staff pool service provider (20% commission default) |
+There are no default or demo credentials. Set `ADMIN_USERNAME` and `ADMIN_PASSWORD` only for the initial bootstrap command, then remove them from the shell or secret store. Admin passwords are stored as bcrypt hashes and are never stored in plaintext by the application.
 
 ---
 
@@ -101,7 +98,7 @@ whiz-barbershop/
 │       └── prisma.ts          # Prisma Client connection-pool singleton
 ├── prisma/
 │   ├── schema.prisma          # Data models with Vercel RHEL engine target
-│   ├── seed.ts                # Database seeder (demo users + 20 services)
+│   ├── seed.ts                # Production-only Admin bootstrap seeder
 │   └── migrations/            # Initial migration with partial unique index
 ├── src/
 │   ├── App.tsx                # React 19 operational UI

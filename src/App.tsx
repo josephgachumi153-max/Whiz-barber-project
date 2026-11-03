@@ -106,10 +106,10 @@ function money(v: number | string) {
 export default function App() {
   const [token, setToken] = useState(localStorage.getItem("whiz_token") || "");
   const [user, setUser] = useState<User | null>(null);
-  const [username, setUsername] = useState("manager");
-  const [password, setPassword] = useState("Manager@12345");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [accountType, setAccountType] = useState<User["role"]>("MANAGER");
+  const [accountType, setAccountType] = useState<User["role"]>("ADMIN");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [section, setSection] = useState("Overview");
