@@ -93,6 +93,11 @@ type AuditLog = {
   createdAt: string;
   actor?: { username: string; fullName?: string | null; role: string } | null;
 };
+type Employee = {
+  id: string;
+  phone?: string | null;
+  user: { id: string; username: string; fullName?: string | null; email?: string | null; role: User["role"]; status: string; isActive: boolean };
+};
 
 const API = (import.meta.env.VITE_API_URL || "/api").replace(/\/$/, "");
 
@@ -134,6 +139,7 @@ export default function App() {
   const [sales, setSales] = useState<Sale[]>([]);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [employees, setEmployees] = useState<Employee[]>([]);
   const [dashboard, setDashboard] = useState({
     customers: 0,
     services: 0,
@@ -144,6 +150,7 @@ export default function App() {
   const [showCustomer, setShowCustomer] = useState(false);
   const [showService, setShowService] = useState(false);
   const [showOrder, setShowOrder] = useState(false);
+  const [showEmployee, setShowEmployee] = useState(false);
 
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
@@ -164,6 +171,11 @@ export default function App() {
   const [inventoryQuantity, setInventoryQuantity] = useState("0");
   const [inventoryReorderLevel, setInventoryReorderLevel] = useState("0");
   const [inventoryCostPrice, setInventoryCostPrice] = useState("");
+  const [employeeName, setEmployeeName] = useState("");
+  const [employeeUsername, setEmployeeUsername] = useState("");
+  const [employeePassword, setEmployeePassword] = useState("");
+  const [employeeRole, setEmployeeRole] = useState<Exclude<User["role"], "ADMIN">>("BARBER");
+  const [employeePhone, setEmployeePhone] = useState("");
 
   async function request(path: string, options: RequestInit = {}) {
     const response = await fetch(`${API}${path}`, {
@@ -184,8 +196,8 @@ export default function App() {
   async function load() {
     if (!token) return;
     try {
-      const [me, c, s, b, a, o, t, d, i] = await Promise.all([
-        request("/auth/me"),
+      const me = await request("/auth/me");
+      const [c, s, b, a, o, t, d, i, e] = await Promise.all([
         request("/customers"),
         request("/services"),
         request("/barbers"),
@@ -194,6 +206,7 @@ export default function App() {
         request("/transactions"),
         request("/dashboard"),
         request("/inventory")
+        , me.role === "ADMIN" ? request("/employees") : Promise.resolve([])
       ]);
       setUser(me);
       setCustomers(c);
@@ -213,6 +226,7 @@ export default function App() {
       } else {
         setAuditLogs([]);
       }
+      setEmployees(e);
 
       if (!orderCustomer && c[0]) setOrderCustomer(c[0].id);
       if (!orderService && s[0]) setOrderService(s[0].id);
@@ -370,6 +384,19 @@ export default function App() {
     }
   }
 
+  async function submitEmployee(e: FormEvent) {
+    e.preventDefault();
+    try {
+      await request("/employees", {
+        method: "POST",
+        body: JSON.stringify({ username: employeeUsername, password: employeePassword, fullName: employeeName, phone: employeePhone || undefined, role: employeeRole })
+      });
+      setEmployeeName(""); setEmployeeUsername(""); setEmployeePassword(""); setEmployeePhone("");
+      setShowEmployee(false);
+      await load();
+    } catch (e) { setError((e as Error).message); }
+  }
+
   async function mutate(path: string, method = "POST", body?: unknown) {
     try {
       await request(path, {
@@ -389,7 +416,8 @@ export default function App() {
     { name: "Orders", icon: ClipboardList },
     { name: "Sales", icon: CircleDollarSign },
     { name: "Inventory", icon: Package },
-    ...(user?.role === "ADMIN" ? [{ name: "Admin Logs", icon: ShieldCheck }] : [])
+    ...(user?.role === "ADMIN" ? [{ name: "Admin Logs", icon: ShieldCheck }] : []),
+    ...(user?.role === "ADMIN" ? [{ name: "Employees", icon: Users }] : [])
   ];
 
   const activeOrders = orders.filter((o) =>
@@ -916,6 +944,17 @@ export default function App() {
             </div>
           </section>
         )}
+        {section === "Employees" && user?.role === "ADMIN" && (
+          <section className="panel page-panel">
+            <div className="panel-head">
+              <div><h3>Employee accounts</h3><p className="muted">Manage managers, barbers and support staff.</p></div>
+              <button className="primary" onClick={() => setShowEmployee(true)}><Plus size={17} /> Add employee</button>
+            </div>
+            <div className="table-wrap"><table><thead><tr><th>Employee</th><th>Username</th><th>Role</th><th>Phone</th><th>Status</th><th></th></tr></thead><tbody>
+              {employees.map((employee) => <tr key={employee.id}><td><b>{employee.user.fullName || employee.user.username}</b><small className="cell-sub">{employee.user.email || "No email"}</small></td><td>{employee.user.username}</td><td><span className="tag">{employee.user.role}</span></td><td>{employee.phone || "—"}</td><td><span className={employee.user.isActive ? "status available" : "status busy"}>{employee.user.isActive ? "Active" : "Suspended"}</span></td><td><button className="text-btn" onClick={() => mutate(`/employees/${employee.user.id}`, "PATCH", { isActive: !employee.user.isActive })}>{employee.user.isActive ? "Suspend" : "Activate"}</button></td></tr>)}
+            </tbody></table>{employees.length === 0 && <p className="empty">No employee accounts yet.</p>}</div>
+          </section>
+        )}
 
         <footer className="footer">
           <span>WHIZ BARBERSHOP MANAGEMENT SYSTEM</span>
@@ -1128,6 +1167,19 @@ export default function App() {
                 Create order
               </button>
             </div>
+          </form>
+        </Modal>
+      )}
+
+      {showEmployee && (
+        <Modal title="Add employee account" close={() => setShowEmployee(false)}>
+          <form className="stack" onSubmit={submitEmployee}>
+            <label>Full name<input value={employeeName} onChange={(e) => setEmployeeName(e.target.value)} required autoFocus /></label>
+            <label>Username<input value={employeeUsername} onChange={(e) => setEmployeeUsername(e.target.value)} minLength={3} required /></label>
+            <label>Temporary password<input type="password" value={employeePassword} onChange={(e) => setEmployeePassword(e.target.value)} minLength={10} required /></label>
+            <label>Phone<input value={employeePhone} onChange={(e) => setEmployeePhone(e.target.value)} /></label>
+            <label>Role<select value={employeeRole} onChange={(e) => setEmployeeRole(e.target.value as typeof employeeRole)}><option value="MANAGER">Manager</option><option value="BARBER">Barber</option><option value="SHAMPOO_ASSISTANT">Shampoo Assistant</option></select></label>
+            <div className="modal-actions"><button type="button" className="secondary" onClick={() => setShowEmployee(false)}>Cancel</button><button className="primary">Create employee</button></div>
           </form>
         </Modal>
       )}

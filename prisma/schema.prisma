@@ -53,6 +53,7 @@ model User {
   email        String?
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
+  employee     Employee?
   barber       Barber?
   customers    Customer[]     @relation("ManagerCustomers")
   services     Service[]      @relation("ManagerServices")
@@ -63,6 +64,18 @@ model User {
   auditLogs    AuditLog[]     @relation("AuditActor")
 
   @@index([role, status, isActive])
+}
+
+model Employee {
+  id          String      @id @default(cuid())
+  userId      String      @unique
+  phone       String?
+  isActive    Boolean     @default(true)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([isActive])
 }
 
 model Barber {

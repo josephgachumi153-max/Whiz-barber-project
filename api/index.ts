@@ -285,6 +285,80 @@ app.post("/api/auth/managers", { preHandler: [auth, role(Role.ADMIN)] }, async (
   }
 });
 
+const employeeCreateSchema = z.object({
+  username: z.string().trim().min(3).max(40),
+  password: z.string().min(10),
+  fullName: z.string().trim().min(1).max(100),
+  email: z.string().email().optional().or(z.literal("")),
+  phone: z.string().trim().max(30).optional(),
+  role: z.enum(["MANAGER", "BARBER", "SHAMPOO_ASSISTANT"]),
+  commissionPct: z.coerce.number().min(0).max(100).default(0)
+});
+
+app.get("/api/employees", { preHandler: [auth, role(Role.ADMIN)] }, async () => {
+  return prisma.employee.findMany({
+    include: {
+      user: {
+        select: { id: true, username: true, fullName: true, email: true, role: true, status: true, isActive: true }
+      }
+    },
+    orderBy: { createdAt: "desc" }
+  });
+});
+
+app.post("/api/employees", { preHandler: [auth, role(Role.ADMIN)] }, async (req, reply) => {
+  const parsed = employeeCreateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ message: "Invalid employee details", issues: parsed.error.flatten() });
+  }
+
+  const { password, phone, commissionPct, ...account } = parsed.data;
+  try {
+    const employee = await prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: { ...account, email: account.email || null, passwordHash: await hashPassword(password), role: parsed.data.role }
+      });
+      await tx.employee.create({ data: { userId: user.id, phone: phone || null } });
+      if (user.role === Role.BARBER || user.role === Role.SHAMPOO_ASSISTANT) {
+        await tx.barber.create({ data: { userId: user.id, name: user.fullName || user.username, phone: phone || null, commissionPct } });
+      }
+      return { id: user.id, username: user.username, fullName: user.fullName, email: user.email, role: user.role, phone };
+    });
+    return reply.code(201).send(employee);
+  } catch (e) {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      return reply.code(409).send({ message: "Username already exists" });
+    }
+    throw e;
+  }
+});
+
+app.patch("/api/employees/:id", { preHandler: [auth, role(Role.ADMIN)] }, async (req, reply) => {
+  const { id } = idSchema.parse(req.params);
+  const parsed = z.object({
+    fullName: z.string().trim().min(1).max(100).optional(),
+    email: z.string().email().optional().or(z.literal("")),
+    phone: z.string().trim().max(30).optional(),
+    isActive: z.boolean().optional(),
+    password: z.string().min(10).optional()
+  }).safeParse(req.body);
+  if (!parsed.success) return reply.code(400).send({ message: "Invalid employee details", issues: parsed.error.flatten() });
+
+  const employee = await prisma.employee.findUnique({ where: { userId: id }, include: { user: true } });
+  if (!employee) return reply.code(404).send({ message: "Employee not found" });
+  const { password, phone, isActive, ...userData } = parsed.data;
+  const updated = await prisma.$transaction(async (tx) => {
+    const user = await tx.user.update({
+      where: { id },
+      data: { ...userData, email: userData.email === "" ? null : userData.email, ...(password ? { passwordHash: await hashPassword(password) } : {}), ...(isActive === undefined ? {} : { isActive, status: isActive ? "APPROVED" : "SUSPENDED" }) },
+      select: { id: true, username: true, fullName: true, email: true, role: true, status: true, isActive: true }
+    });
+    const record = await tx.employee.update({ where: { userId: id }, data: { ...(phone === undefined ? {} : { phone }), ...(isActive === undefined ? {} : { isActive }) } });
+    return { ...record, user };
+  });
+  return updated;
+});
+
 app.get("/api/customers", { preHandler: auth }, async (req) => {
   const managerId = managerIdFor(req);
   return prisma.customer.findMany({
@@ -300,11 +374,10 @@ app.post("/api/customers", { preHandler: [auth, role(Role.ADMIN, Role.MANAGER)] 
   }
 
   const body = parsed.data;
-  const ownerId = req.user.role === Role.ADMIN ? (req.body as any).managerId : req.user.sub;
-  if (!ownerId) return reply.code(400).send({ message: "Admin must supply managerId" });
+  const ownerId = req.user.role === Role.ADMIN ? ((req.body as any).managerId || req.user.sub) : req.user.sub;
 
   const owner = await prisma.user.findUnique({ where: { id: ownerId } });
-  if (!owner || owner.role !== Role.MANAGER) {
+  if (!owner || (owner.role !== Role.ADMIN && owner.role !== Role.MANAGER)) {
     return reply.code(400).send({ message: "Invalid managerId" });
   }
 
@@ -345,8 +418,7 @@ app.post("/api/services", { preHandler: [auth, role(Role.ADMIN, Role.MANAGER)] }
     return reply.code(400).send({ message: "Invalid service", issues: parsed.error.flatten() });
   }
 
-  const ownerId = req.user.role === Role.ADMIN ? (req.body as any).managerId : req.user.sub;
-  if (!ownerId) return reply.code(400).send({ message: "Admin must supply managerId" });
+  const ownerId = req.user.role === Role.ADMIN ? ((req.body as any).managerId || req.user.sub) : req.user.sub;
 
   try {
     const service = await prisma.service.create({
@@ -487,8 +559,7 @@ app.post("/api/orders", { preHandler: [auth, role(Role.ADMIN, Role.MANAGER)] }, 
   }
 
   const input = parsed.data;
-  const managerId = req.user.role === Role.ADMIN ? (req.body as any).managerId : req.user.sub;
-  if (!managerId) return reply.code(400).send({ message: "Admin must supply managerId" });
+  const managerId = req.user.role === Role.ADMIN ? ((req.body as any).managerId || req.user.sub) : req.user.sub;
 
   const [existingCustomer, service, barber] = await Promise.all([
     input.customerId
