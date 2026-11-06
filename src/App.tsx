@@ -174,6 +174,7 @@ export default function App() {
   const [employeeName, setEmployeeName] = useState("");
   const [employeeUsername, setEmployeeUsername] = useState("");
   const [employeePassword, setEmployeePassword] = useState("");
+  const [showEmployeePassword, setShowEmployeePassword] = useState(false);
   const [employeeRole, setEmployeeRole] = useState<Exclude<User["role"], "ADMIN">>("BARBER");
   const [employeePhone, setEmployeePhone] = useState("");
 
@@ -1182,7 +1183,7 @@ export default function App() {
           <form className="stack" onSubmit={submitEmployee}>
             <label>Full name<input value={employeeName} onChange={(e) => setEmployeeName(e.target.value)} required autoFocus /></label>
             <label>Username<input value={employeeUsername} onChange={(e) => setEmployeeUsername(e.target.value)} minLength={3} required /></label>
-            <label>Temporary password<input type="password" value={employeePassword} onChange={(e) => setEmployeePassword(e.target.value)} minLength={10} required /></label>
+            <label>Temporary password<div className="password-control"><input type={showEmployeePassword ? "text" : "password"} value={employeePassword} onChange={(e) => setEmployeePassword(e.target.value)} minLength={10} required autoComplete="new-password" /><button type="button" className="password-toggle" onClick={() => setShowEmployeePassword((visible) => !visible)} aria-label={showEmployeePassword ? "Hide employee password" : "Show employee password"} title={showEmployeePassword ? "Hide employee password" : "Show employee password"}>{showEmployeePassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></div></label>
             <label>Phone<input value={employeePhone} onChange={(e) => setEmployeePhone(e.target.value)} /></label>
             <label>Role<select value={employeeRole} onChange={(e) => setEmployeeRole(e.target.value as typeof employeeRole)}><option value="MANAGER">Manager</option><option value="BARBER">Barber</option><option value="SHAMPOO_ASSISTANT">Shampoo Assistant</option></select></label>
             <div className="modal-actions"><button type="button" className="secondary" onClick={() => setShowEmployee(false)}>Cancel</button><button className="primary">Create employee</button></div>
