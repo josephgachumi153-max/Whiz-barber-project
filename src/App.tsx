@@ -51,6 +51,14 @@ type Barber = {
   isActive: boolean;
 };
 
+type ServiceOrderItem = {
+  id: string;
+  serviceId: string;
+  servicePrice: string | number;
+  commissionAmt: string | number;
+  service: Service;
+};
+
 type Order = {
   id: string;
   status: string;
@@ -58,9 +66,10 @@ type Order = {
   commissionAmt: string | number;
   createdAt: string;
   customer: Customer;
-  service: Service;
+  service?: Service;
   barber: Barber;
   paymentMethod: string;
+  items?: ServiceOrderItem[];
 };
 
 type Sale = {
@@ -69,9 +78,10 @@ type Sale = {
   commissionAmount: string | number;
   createdAt: string;
   customer: Customer;
-  service: Service;
+  service?: Service;
   barber: Barber;
   paymentMethod?: string;
+  order?: { items?: ServiceOrderItem[] };
 };
 
 type InventoryItem = {
@@ -160,9 +170,12 @@ export default function App() {
   const [serviceCommission, setServiceCommission] = useState("35");
 
   const [orderCustomer, setOrderCustomer] = useState("");
+  const [customerSearch, setCustomerSearch] = useState("");
   const [newOrderCustomerName, setNewOrderCustomerName] = useState("");
   const [newOrderCustomerPhone, setNewOrderCustomerPhone] = useState("");
   const [orderService, setOrderService] = useState("");
+  const [orderServiceIds, setOrderServiceIds] = useState<string[]>([]);
+  const [serviceSearch, setServiceSearch] = useState("");
   const [orderBarber, setOrderBarber] = useState("");
   const [payment, setPayment] = useState("CASH");
   const [showInventory, setShowInventory] = useState(false);
@@ -229,9 +242,6 @@ export default function App() {
       }
       setEmployees(e);
 
-      if (!orderCustomer && c[0]) setOrderCustomer(c[0].id);
-      if (!orderService && s[0]) setOrderService(s[0].id);
-      if (!orderBarber && a[0]) setOrderBarber(a[0].id);
       setError("");
     } catch (e) {
       setError((e as Error).message);
@@ -336,6 +346,9 @@ export default function App() {
   async function submitOrder(e: FormEvent) {
     e.preventDefault();
     try {
+      if (!orderCustomer || !orderServiceIds.length || !orderBarber) {
+        throw new Error("Choose a customer, at least one service, and a staff member");
+      }
       const customer = orderCustomer === "__new__"
         ? {
             name: newOrderCustomerName,
@@ -346,15 +359,20 @@ export default function App() {
         method: "POST",
         body: JSON.stringify({
           ...(customer ? { newCustomer: customer } : { customerId: orderCustomer }),
-          serviceId: orderService,
+          serviceIds: orderServiceIds,
           barberId: orderBarber,
           paymentMethod: payment
         })
       });
       setShowOrder(false);
       setOrderCustomer("");
+      setCustomerSearch("");
       setNewOrderCustomerName("");
       setNewOrderCustomerPhone("");
+      setOrderServiceIds([]);
+      setServiceSearch("");
+      setOrderBarber("");
+      setPayment("CASH");
       await load();
     } catch (e) {
       setError((e as Error).message);
@@ -431,6 +449,21 @@ export default function App() {
     ["ASSIGNED", "IN_PROGRESS"].includes(o.status)
   );
   const title = section === "Overview" ? "Good day" : section;
+  const selectedOrderServices = services.filter((service) => orderServiceIds.includes(service.id));
+  const selectedOrderBarber = available.find((barber) => barber.id === orderBarber);
+  const customerMatches = customers
+    .filter((customer) => `${customer.name} ${customer.phone || ""}`.toLowerCase().includes(customerSearch.trim().toLowerCase()))
+    .slice(0, 8);
+  const serviceMatches = services
+    .filter((service) => `${service.name} ${service.price}`.toLowerCase().includes(serviceSearch.trim().toLowerCase()))
+    .slice(0, 12);
+  const orderTotal = selectedOrderServices.reduce((sum, service) => sum + Number(service.price), 0);
+  const orderCommission = selectedOrderServices.reduce((sum, service) => {
+    const pct = service.commissionPct !== null && service.commissionPct !== undefined
+      ? Number(service.commissionPct)
+      : Number(selectedOrderBarber?.commissionPct || 0);
+    return sum + Math.round(Number(service.price) * pct) / 100;
+  }, 0);
 
   if (!token) {
     return (
@@ -850,7 +883,7 @@ export default function App() {
                   {sales.map((s) => (
                     <tr key={s.id}>
                       <td>{s.customer?.name}</td>
-                      <td>{s.service?.name}</td>
+                      <td>{s.order?.items?.length ? s.order.items.map((item) => item.service.name).join(", ") : s.service?.name}</td>
                       <td>{s.barber?.name}</td>
                       <td>
                         <span className="tag">
@@ -1070,25 +1103,52 @@ export default function App() {
         <Modal title="Create service order" close={() => setShowOrder(false)}>
           <form className="stack" onSubmit={submitOrder}>
             <p className="muted small">
-              Choose the customer, service, and an available staff member. Price
-              and commission are frozen at creation.
+              Search for an enrolled customer or add a new one, select one or more
+              services, then assign staff and payment method. Prices and commission
+              are frozen at creation.
             </p>
             <label>
-              Customer
-              <select
-                value={orderCustomer}
-                onChange={(e) => setOrderCustomer(e.target.value)}
+              Customer name or phone
+              <input
+                value={customerSearch}
+                onChange={(e) => {
+                  setCustomerSearch(e.target.value);
+                  setOrderCustomer("");
+                }}
+                placeholder="Search enrolled customers"
                 required
-              >
-                <option value="">Select customer</option>
-                <option value="__new__">+ Create new customer</option>
-                {customers.map((c) => (
-                  <option value={c.id} key={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
+                autoFocus
+              />
             </label>
+            {!orderCustomer && customerSearch.trim() && (
+              <div className="choice-list">
+                {customerMatches.map((customer) => (
+                  <button
+                    type="button"
+                    className="choice-row"
+                    key={customer.id}
+                    onClick={() => {
+                      setOrderCustomer(customer.id);
+                      setCustomerSearch(customer.name);
+                    }}
+                  >
+                    <span><b>{customer.name}</b><small>{customer.phone || "No phone number"}</small></span>
+                    <span className="muted small">Enrolled</span>
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className="choice-row new-choice"
+                  onClick={() => {
+                    setOrderCustomer("__new__");
+                    setNewOrderCustomerName(customerSearch.trim());
+                  }}
+                >
+                  <span><b>+ Add new customer</b><small>{customerSearch.trim()}</small></span>
+                  <span className="muted small">Save on order</span>
+                </button>
+              </div>
+            )}
             {orderCustomer === "__new__" && (
               <>
                 <label>
@@ -1111,11 +1171,42 @@ export default function App() {
               </>
             )}
             <label>
+              Search services
+              <input
+                value={serviceSearch}
+                onChange={(e) => setServiceSearch(e.target.value)}
+                placeholder="Search by service name"
+              />
+            </label>
+            <div className="choice-list service-choices">
+              {serviceMatches.map((service) => (
+                <label className="choice-row" key={service.id}>
+                  <span className="choice-main">
+                    <input
+                      type="checkbox"
+                      checked={orderServiceIds.includes(service.id)}
+                      onChange={() => setOrderServiceIds((current) => current.includes(service.id)
+                        ? current.filter((id) => id !== service.id)
+                        : [...current, service.id])}
+                    />
+                    <span><b>{service.name}</b><small>{money(service.price)}{service.commissionPct !== null && service.commissionPct !== undefined ? ` · ${service.commissionPct}% commission` : " · staff commission"}</small></span>
+                  </span>
+                  <span className="muted small">{service.durationMinutes} min</span>
+                </label>
+              ))}
+              {!serviceMatches.length && <p className="empty">No matching services.</p>}
+            </div>
+            {selectedOrderServices.length > 0 && (
+              <div className="order-summary">
+                <div><span>{selectedOrderServices.length} service{selectedOrderServices.length === 1 ? "" : "s"} selected</span><b>{money(orderTotal)}</b></div>
+                <small>Estimated barber commission: {money(orderCommission)}</small>
+              </div>
+            )}
+            <label className="legacy-order-service">
               Service
               <select
                 value={orderService}
                 onChange={(e) => setOrderService(e.target.value)}
-                required
               >
                 <option value="">Select service</option>
                 {services.map((s) => (
@@ -1126,7 +1217,7 @@ export default function App() {
               </select>
             </label>
             <label>
-              Available staff member
+              Personnel
               <select
                 value={orderBarber}
                 onChange={(e) => setOrderBarber(e.target.value)}
@@ -1148,8 +1239,6 @@ export default function App() {
               >
                 <option value="CASH">Cash</option>
                 <option value="MPESA">M-Pesa</option>
-                <option value="CARD">Card</option>
-                <option value="OTHER">Other</option>
               </select>
             </label>
             {available.length === 0 && (
@@ -1168,7 +1257,7 @@ export default function App() {
               <button
                 className="primary"
                 disabled={
-                  !available.length || !orderCustomer || !orderService || !services.length
+                  !available.length || !orderCustomer || !orderServiceIds.length || !services.length
                 }
               >
                 Create order
@@ -1273,7 +1362,7 @@ function OrderTable({
               <td>
                 <b>{o.customer?.name || "Customer"}</b>
                 <small className="cell-sub">
-                  {o.service?.name || "Service"} ·{" "}
+                  {o.items?.length ? o.items.map((item) => item.service.name).join(", ") : o.service?.name || "Service"} ·{" "}
                   {new Date(o.createdAt).toLocaleTimeString([], {
                     hour: "2-digit",
                     minute: "2-digit"

@@ -134,13 +134,20 @@ const inventoryAdjustmentSchema = z.object({
 const orderSchema = z.object({
   customerId: z.string().min(1).optional(),
   newCustomer: customerSchema.optional(),
-  serviceId: z.string().min(1),
+  serviceId: z.string().min(1).optional(),
+  serviceIds: z.array(z.string().min(1)).min(1).max(20).refine((ids) => new Set(ids).size === ids.length, "Choose each service only once").optional(),
   barberId: z.string().min(1),
   paymentMethod: z.nativeEnum(PaymentMethod).default(PaymentMethod.CASH),
   notes: z.string().max(500).optional()
 }).refine((value) => Boolean(value.customerId) !== Boolean(value.newCustomer), {
   message: "Choose an existing customer or provide a new customer"
-});
+}).refine((value) => Boolean(value.serviceIds?.length || value.serviceId), {
+  message: "Choose at least one service",
+  path: ["serviceIds"]
+}).transform((value) => ({
+  ...value,
+  serviceIds: value.serviceIds?.length ? value.serviceIds : [value.serviceId!]
+}));
 
 const idSchema = z.object({ id: z.string().min(1) });
 
@@ -594,7 +601,13 @@ app.get("/api/orders", { preHandler: auth }, async (req) => {
 
   return prisma.serviceOrder.findMany({
     where,
-    include: { customer: true, service: true, barber: true, transaction: true },
+    include: {
+      customer: true,
+      service: true,
+      barber: true,
+      transaction: true,
+      items: { include: { service: true }, orderBy: { createdAt: "asc" } }
+    },
     orderBy: { createdAt: "desc" },
     take: 100
   });
@@ -609,7 +622,7 @@ app.post("/api/orders", { preHandler: [auth, role(Role.ADMIN, Role.MANAGER)] }, 
   const input = parsed.data;
   const managerId = req.user.role === Role.ADMIN ? ((req.body as any).managerId || req.user.sub) : req.user.sub;
 
-  const [existingCustomer, service, barber] = await Promise.all([
+  const [existingCustomer, services, barber] = await Promise.all([
     input.customerId
       ? prisma.customer.findFirst({
           where: {
@@ -619,12 +632,13 @@ app.post("/api/orders", { preHandler: [auth, role(Role.ADMIN, Role.MANAGER)] }, 
           }
         })
       : Promise.resolve(null),
-    prisma.service.findFirst({
+    prisma.service.findMany({
       where: {
-        id: input.serviceId,
+        id: { in: input.serviceIds },
         isActive: true,
         ...(req.user.role === Role.ADMIN ? {} : { managerId })
-      }
+      },
+      orderBy: { createdAt: "asc" }
     }),
     prisma.barber.findFirst({ where: { id: input.barberId, isActive: true } })
   ]);
@@ -632,15 +646,26 @@ app.post("/api/orders", { preHandler: [auth, role(Role.ADMIN, Role.MANAGER)] }, 
   if (!input.newCustomer && !existingCustomer) {
     return reply.code(404).send({ message: "Active customer not found in your book" });
   }
-  if (!service) return reply.code(404).send({ message: "Active service not found in your catalogue" });
+  const servicesById = new Map(services.map((service) => [service.id, service]));
+  const selectedServices = input.serviceIds.map((serviceId) => servicesById.get(serviceId));
+  if (selectedServices.some((service) => !service)) {
+    return reply.code(404).send({ message: "One or more selected services are not available in your catalogue" });
+  }
   if (!barber) return reply.code(404).send({ message: "Barber not found" });
 
-  const price = Number(service.price);
-  const pct =
-    service.commissionPct !== null
-      ? Number(service.commissionPct)
+  const serviceLines = selectedServices.map((service) => {
+    const price = Number(service!.price);
+    const pct = service!.commissionPct !== null
+      ? Number(service!.commissionPct)
       : Number(barber.commissionPct);
-  const commission = Math.round(price * pct) / 100;
+    return {
+      service: service!,
+      price,
+      commission: Math.round(price * pct) / 100
+    };
+  });
+  const totalPrice = serviceLines.reduce((sum, line) => sum + line.price, 0);
+  const totalCommission = serviceLines.reduce((sum, line) => sum + line.commission, 0);
 
   try {
     const order = await prisma.$transaction(async (tx) => {
@@ -658,14 +683,26 @@ app.post("/api/orders", { preHandler: [auth, role(Role.ADMIN, Role.MANAGER)] }, 
         data: {
           managerId,
           customerId: customer.id,
-          serviceId: service.id,
+          serviceId: serviceLines[0].service.id,
           barberId: barber.id,
-          servicePrice: price,
-          commissionAmt: commission,
+          servicePrice: totalPrice,
+          commissionAmt: totalCommission,
           paymentMethod: input.paymentMethod,
-          notes: input.notes
+          notes: input.notes,
+          items: {
+            create: serviceLines.map((line) => ({
+              serviceId: line.service.id,
+              servicePrice: line.price,
+              commissionAmt: line.commission
+            }))
+          }
         },
-        include: { customer: true, service: true, barber: true }
+        include: {
+          customer: true,
+          service: true,
+          barber: true,
+          items: { include: { service: true }, orderBy: { createdAt: "asc" } }
+        }
       });
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     return reply.code(201).send(order);
@@ -687,7 +724,10 @@ app.post("/api/orders/:id/reassign", { preHandler: [auth, role(Role.MANAGER, Rol
   const { id } = idSchema.parse(req.params);
   const parsed = z.object({ barberId: z.string().min(1) }).safeParse(req.body);
   if (!parsed.success) return reply.code(400).send({ message: "A barberId is required" });
-  const order = await prisma.serviceOrder.findUnique({ where: { id }, include: { service: true } });
+  const order = await prisma.serviceOrder.findUnique({
+    where: { id },
+    include: { service: true, items: { include: { service: true }, orderBy: { createdAt: "asc" } } }
+  });
   if (!order) return reply.code(404).send({ message: "Order not found" });
   if (req.user.role === Role.MANAGER && order.managerId !== req.user.sub) return reply.code(403).send({ message: "Not your record" });
   if (order.status !== OrderStatus.ASSIGNED) return reply.code(400).send({ message: "Only assigned orders can be reassigned" });
@@ -695,8 +735,34 @@ app.post("/api/orders/:id/reassign", { preHandler: [auth, role(Role.MANAGER, Rol
   if (!barber) return reply.code(404).send({ message: "Barber not found" });
   const active = await prisma.serviceOrder.findFirst({ where: { barberId: barber.id, status: { in: [OrderStatus.ASSIGNED, OrderStatus.IN_PROGRESS] }, NOT: { id } } });
   if (active) return reply.code(409).send({ message: `Barber "${barber.name}" is busy` });
-  const pct = order.service.commissionPct !== null ? Number(order.service.commissionPct) : Number(barber.commissionPct);
-  return prisma.serviceOrder.update({ where: { id }, data: { barberId: barber.id, commissionAmt: Math.round(Number(order.servicePrice) * pct) / 100 }, include: { customer: true, service: true, barber: true } });
+  const serviceLines = order.items.length > 0
+    ? order.items
+    : [{ service: order.service, servicePrice: order.servicePrice }];
+  const commissionAmt = serviceLines.reduce((sum, line) => {
+    const pct = line.service.commissionPct !== null ? Number(line.service.commissionPct) : Number(barber.commissionPct);
+    return sum + Math.round(Number(line.servicePrice) * pct) / 100;
+  }, 0);
+  return prisma.$transaction(async (tx) => {
+    if (order.items.length > 0) {
+      for (const line of order.items) {
+        const pct = line.service.commissionPct !== null ? Number(line.service.commissionPct) : Number(barber.commissionPct);
+        await tx.serviceOrderItem.update({
+          where: { id: line.id },
+          data: { commissionAmt: Math.round(Number(line.servicePrice) * pct) / 100 }
+        });
+      }
+    }
+    return tx.serviceOrder.update({
+      where: { id },
+      data: { barberId: barber.id, commissionAmt },
+      include: {
+        customer: true,
+        service: true,
+        barber: true,
+        items: { include: { service: true }, orderBy: { createdAt: "asc" } }
+      }
+    });
+  });
 });
 
 app.post("/api/orders/:id/start", { preHandler: [auth, role(Role.BARBER, Role.SHAMPOO_ASSISTANT, Role.ADMIN)] }, async (req, reply) => {
@@ -820,7 +886,12 @@ app.get("/api/transactions", { preHandler: auth }, async (req) => {
   const managerId = managerIdFor(req);
   return prisma.transaction.findMany({
     where: managerId ? { managerId } : {},
-    include: { customer: true, service: true, barber: true },
+    include: {
+      customer: true,
+      service: true,
+      barber: true,
+      order: { include: { items: { include: { service: true }, orderBy: { createdAt: "asc" } } } }
+    },
     orderBy: { createdAt: "desc" },
     take: 100
   });
