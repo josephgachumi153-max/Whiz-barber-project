@@ -297,6 +297,7 @@ const employeeCreateSchema = z.object({
 
 app.get("/api/employees", { preHandler: [auth, role(Role.ADMIN)] }, async () => {
   return prisma.employee.findMany({
+    where: { user: { role: { not: Role.ADMIN } } },
     include: {
       user: {
         select: { id: true, username: true, fullName: true, email: true, role: true, status: true, isActive: true }
@@ -357,6 +358,53 @@ app.patch("/api/employees/:id", { preHandler: [auth, role(Role.ADMIN)] }, async 
     return { ...record, user };
   });
   return updated;
+});
+
+app.delete("/api/employees/:id", { preHandler: [auth, role(Role.ADMIN)] }, async (req, reply) => {
+  const { id } = idSchema.parse(req.params);
+  const employee = await prisma.employee.findUnique({
+    where: { userId: id },
+    include: { user: { select: { id: true, username: true, fullName: true, role: true } } }
+  });
+  if (!employee) return reply.code(404).send({ message: "Employee not found" });
+  if (employee.user.role === Role.ADMIN) {
+    return reply.code(400).send({ message: "Admin accounts cannot be deleted as employees" });
+  }
+
+  const [customers, services, orders, transactions, inventoryItems, inventoryMovements, barberOrders, barberTransactions] = await Promise.all([
+    prisma.customer.count({ where: { managerId: id } }),
+    prisma.service.count({ where: { managerId: id } }),
+    prisma.serviceOrder.count({ where: { managerId: id } }),
+    prisma.transaction.count({ where: { managerId: id } }),
+    prisma.inventoryItem.count({ where: { managerId: id } }),
+    prisma.inventoryMovement.count({ where: { managerId: id } }),
+    prisma.serviceOrder.count({ where: { barber: { userId: id } } }),
+    prisma.transaction.count({ where: { barber: { userId: id } } })
+  ]);
+
+  const relatedRecords = { customers, services, orders, transactions, inventoryItems, inventoryMovements, barberOrders, barberTransactions };
+  if (Object.values(relatedRecords).some((count) => count > 0)) {
+    return reply.code(409).send({
+      message: "This employee has associated business records and cannot be deleted. Deactivate the account instead.",
+      relatedRecords
+    });
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.barber.deleteMany({ where: { userId: id } });
+    await tx.employee.delete({ where: { userId: id } });
+    await tx.user.delete({ where: { id } });
+  });
+
+  await writeAudit({
+    actorUserId: req.user.sub,
+    action: "DELETE",
+    entityType: "Employee",
+    entityId: id,
+    beforeData: employee.user
+  });
+
+  return { success: true };
 });
 
 app.get("/api/customers", { preHandler: auth }, async (req) => {

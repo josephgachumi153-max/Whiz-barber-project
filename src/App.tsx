@@ -409,6 +409,12 @@ export default function App() {
     }
   }
 
+  async function removeEmployee(employee: Employee) {
+    const name = employee.user.fullName || employee.user.username;
+    if (!window.confirm(`Delete employee account "${name}"? This cannot be undone.`)) return;
+    await mutate(`/employees/${employee.user.id}`, "DELETE");
+  }
+
   const nav = [
     { name: "Overview", icon: LayoutDashboard },
     { name: "Customers", icon: Users },
@@ -951,7 +957,7 @@ export default function App() {
               <button className="primary" onClick={() => setShowEmployee(true)}><Plus size={17} /> Add employee</button>
             </div>
             <div className="table-wrap"><table><thead><tr><th>Employee</th><th>Username</th><th>Role</th><th>Phone</th><th>Status</th><th></th></tr></thead><tbody>
-              {employees.map((employee) => <tr key={employee.id}><td><b>{employee.user.fullName || employee.user.username}</b><small className="cell-sub">{employee.user.email || "No email"}</small></td><td>{employee.user.username}</td><td><span className="tag">{employee.user.role}</span></td><td>{employee.phone || "—"}</td><td><span className={employee.user.isActive ? "status available" : "status busy"}>{employee.user.isActive ? "Active" : "Suspended"}</span></td><td><button className="text-btn" onClick={() => mutate(`/employees/${employee.user.id}`, "PATCH", { isActive: !employee.user.isActive })}>{employee.user.isActive ? "Suspend" : "Activate"}</button></td></tr>)}
+              {employees.map((employee) => <tr key={employee.id}><td><b>{employee.user.fullName || employee.user.username}</b><small className="cell-sub">{employee.user.email || "No email"}</small></td><td>{employee.user.username}</td><td><span className="tag">{employee.user.role}</span></td><td>{employee.phone || "—"}</td><td><span className={employee.user.isActive ? "status available" : "status busy"}>{employee.user.isActive ? "Active" : "Suspended"}</span></td><td><button className="text-btn danger-text" onClick={() => removeEmployee(employee)}>Delete</button></td></tr>)}
             </tbody></table>{employees.length === 0 && <p className="empty">No employee accounts yet.</p>}</div>
           </section>
         )}
