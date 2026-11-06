@@ -805,6 +805,16 @@ button.choice-row {
   color: #718649;
 }
 
+.availability-note {
+  border: 1px solid #dce9c2;
+  border-radius: 8px;
+  background: #f5faeb;
+  color: #5d762b;
+  padding: 9px 10px;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .modal-actions {
   display: flex;
   justify-content: flex-end;

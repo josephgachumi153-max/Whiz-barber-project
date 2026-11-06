@@ -18,6 +18,52 @@ if (isProduction && (!configuredJwtSecret || configuredJwtSecret.length < 32)) {
 const JWT_SECRET = configuredJwtSecret ?? "development-only-secret-change-before-deploy";
 const LOYALTY_RATE = Number(process.env.LOYALTY_POINTS_PER_KES ?? 0.01);
 
+const DEFAULT_SERVICE_CATALOG = [
+  { name: "Hair Cut", price: 250 },
+  { name: "Kids", price: 100 },
+  { name: "Beards", price: 100 },
+  { name: "Cut", price: 50 },
+  { name: "Dye", price: 300 },
+  { name: "Dye & Hair Cut", price: 500 },
+  { name: "Hair Relaxing", price: 300 },
+  { name: "Manicure", price: 400 },
+  { name: "Pedicure", price: 600 },
+  { name: "Full Facial", price: 500 },
+  { name: "Nails Cut & Filling", price: 200 },
+  { name: "Scrubbing", price: 100 },
+  { name: "Back Massage", price: 300 },
+  { name: "Sticons", price: 500 },
+  { name: "Gum Gel", price: 800 },
+  { name: "Gel Polish", price: 300 },
+  { name: "Tips", price: 600 },
+  { name: "Eyebrows", price: 100 },
+  { name: "Steaming", price: 300 },
+  { name: "Half Pedicure", price: 250 }
+] as const;
+
+async function ensureDefaultServiceCatalog(ownerId: string) {
+  const existing = await prisma.service.findMany({
+    where: {
+      managerId: ownerId,
+      name: { in: DEFAULT_SERVICE_CATALOG.map((service) => service.name) }
+    },
+    select: { name: true }
+  });
+  const existingNames = new Set(existing.map((service) => service.name));
+  const missingServices = DEFAULT_SERVICE_CATALOG.filter((service) => !existingNames.has(service.name));
+  if (!missingServices.length) return;
+
+  await prisma.service.createMany({
+    data: missingServices.map((service) => ({
+      ...service,
+      managerId: ownerId,
+      commissionPct: null,
+      durationMinutes: 30
+    })),
+    skipDuplicates: true
+  });
+}
+
 declare module "@fastify/jwt" {
   interface FastifyJWT {
     payload: { sub: string; username: string; role: Role };
@@ -390,14 +436,64 @@ app.delete("/api/employees/:id", { preHandler: [auth, role(Role.ADMIN)] }, async
   ]);
 
   const relatedRecords = { customers, services, orders, transactions, inventoryItems, inventoryMovements, barberOrders, barberTransactions };
-  if (Object.values(relatedRecords).some((count) => count > 0)) {
-    return reply.code(409).send({
-      message: "This employee has associated business records and cannot be deleted. Deactivate the account instead.",
-      relatedRecords
-    });
+  const managerRecords = { customers, services, orders, transactions, inventoryItems, inventoryMovements };
+  let transferred = managerRecords;
+
+  if (employee.user.role !== Role.MANAGER || barberOrders > 0 || barberTransactions > 0) {
+    if (Object.values(relatedRecords).some((count) => count > 0)) {
+      return reply.code(409).send({
+        message: "This employee has associated business records and cannot be deleted. Deactivate the account instead.",
+        relatedRecords
+      });
+    }
   }
 
   await prisma.$transaction(async (tx) => {
+    if (employee.user.role === Role.MANAGER) {
+      const adminServices = await tx.service.findMany({
+        where: { managerId: req.user.sub },
+        select: { name: true }
+      });
+      const serviceNames = new Set(adminServices.map((service) => service.name));
+      const managerServices = await tx.service.findMany({
+        where: { managerId: id },
+        select: { id: true, name: true }
+      });
+      for (const service of managerServices) {
+        let name = service.name;
+        let suffix = 1;
+        while (serviceNames.has(name)) {
+          name = `${service.name} (Transferred ${suffix++})`;
+        }
+        await tx.service.update({ where: { id: service.id }, data: { managerId: req.user.sub, name } });
+        serviceNames.add(name);
+      }
+
+      const adminInventory = await tx.inventoryItem.findMany({
+        where: { managerId: req.user.sub },
+        select: { name: true }
+      });
+      const inventoryNames = new Set(adminInventory.map((item) => item.name));
+      const managerInventory = await tx.inventoryItem.findMany({
+        where: { managerId: id },
+        select: { id: true, name: true }
+      });
+      for (const item of managerInventory) {
+        let name = item.name;
+        let suffix = 1;
+        while (inventoryNames.has(name)) {
+          name = `${item.name} (Transferred ${suffix++})`;
+        }
+        await tx.inventoryItem.update({ where: { id: item.id }, data: { managerId: req.user.sub, name } });
+        inventoryNames.add(name);
+      }
+
+      await tx.customer.updateMany({ where: { managerId: id }, data: { managerId: req.user.sub } });
+      await tx.serviceOrder.updateMany({ where: { managerId: id }, data: { managerId: req.user.sub } });
+      await tx.transaction.updateMany({ where: { managerId: id }, data: { managerId: req.user.sub } });
+      await tx.inventoryMovement.updateMany({ where: { managerId: id }, data: { managerId: req.user.sub } });
+    }
+
     await tx.barber.deleteMany({ where: { userId: id } });
     await tx.employee.delete({ where: { userId: id } });
     await tx.user.delete({ where: { id } });
@@ -408,10 +504,16 @@ app.delete("/api/employees/:id", { preHandler: [auth, role(Role.ADMIN)] }, async
     action: "DELETE",
     entityType: "Employee",
     entityId: id,
-    beforeData: employee.user
+    beforeData: employee.user,
+    afterData: employee.user.role === Role.MANAGER
+      ? { transferredTo: req.user.sub, transferred }
+      : undefined
   });
 
-  return { success: true };
+  return {
+    success: true,
+    ...(employee.user.role === Role.MANAGER ? { transferredTo: req.user.sub, transferred } : {})
+  };
 });
 
 app.get("/api/customers", { preHandler: auth }, async (req) => {
@@ -460,6 +562,9 @@ app.delete("/api/customers/:id", { preHandler: [auth, role(Role.ADMIN, Role.MANA
 });
 
 app.get("/api/services", { preHandler: auth }, async (req) => {
+  if (req.user.role === Role.ADMIN || req.user.role === Role.MANAGER) {
+    await ensureDefaultServiceCatalog(req.user.sub);
+  }
   const managerId = managerIdFor(req);
   return prisma.service.findMany({
     where: { ...(managerId ? { managerId } : {}), isActive: true },
@@ -787,13 +892,17 @@ app.post("/api/orders/:id/start", { preHandler: [auth, role(Role.BARBER, Role.SH
   });
 });
 
-app.post("/api/orders/:id/complete", { preHandler: [auth, role(Role.BARBER, Role.SHAMPOO_ASSISTANT, Role.ADMIN)] }, async (req, reply) => {
+app.post("/api/orders/:id/complete", { preHandler: [auth, role(Role.BARBER, Role.SHAMPOO_ASSISTANT, Role.MANAGER, Role.ADMIN)] }, async (req, reply) => {
   const { id } = idSchema.parse(req.params);
   const order = await prisma.serviceOrder.findUnique({
     where: { id },
     include: { customer: true }
   });
   if (!order) return reply.code(404).send({ message: "Order not found" });
+
+  if (req.user.role === Role.MANAGER && order.managerId !== req.user.sub) {
+    return reply.code(403).send({ message: "Not your order" });
+  }
 
   if (req.user.role === Role.BARBER || req.user.role === Role.SHAMPOO_ASSISTANT) {
     const barber = await prisma.barber.findUnique({ where: { userId: req.user.sub } });

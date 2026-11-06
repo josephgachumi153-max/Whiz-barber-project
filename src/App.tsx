@@ -184,6 +184,7 @@ export default function App() {
   const [inventoryQuantity, setInventoryQuantity] = useState("0");
   const [inventoryReorderLevel, setInventoryReorderLevel] = useState("0");
   const [inventoryCostPrice, setInventoryCostPrice] = useState("");
+  const [inventoryManagerId, setInventoryManagerId] = useState("");
   const [employeeName, setEmployeeName] = useState("");
   const [employeeUsername, setEmployeeUsername] = useState("");
   const [employeePassword, setEmployeePassword] = useState("");
@@ -382,9 +383,16 @@ export default function App() {
   async function submitInventory(e: FormEvent) {
     e.preventDefault();
     try {
+      const managerId = user?.role === "ADMIN"
+        ? inventoryManagerId || managerEmployees[0]?.user.id
+        : undefined;
+      if (user?.role === "ADMIN" && !managerId) {
+        throw new Error("Choose a Manager to own this inventory item");
+      }
       await request("/inventory", {
         method: "POST",
         body: JSON.stringify({
+          ...(managerId ? { managerId } : {}),
           name: inventoryName,
           unit: inventoryUnit,
           quantity: Number(inventoryQuantity),
@@ -397,6 +405,7 @@ export default function App() {
       setInventoryQuantity("0");
       setInventoryReorderLevel("0");
       setInventoryCostPrice("");
+      setInventoryManagerId("");
       await load();
     } catch (e) {
       setError((e as Error).message);
@@ -430,7 +439,10 @@ export default function App() {
 
   async function removeEmployee(employee: Employee) {
     const name = employee.user.fullName || employee.user.username;
-    if (!window.confirm(`Delete employee account "${name}"? This cannot be undone.`)) return;
+    const message = employee.user.role === "MANAGER"
+      ? `Delete Manager account "${name}"? Their customers, services, orders, sales, and inventory will be transferred to your Admin account.`
+      : `Delete employee account "${name}"? This cannot be undone.`;
+    if (!window.confirm(message)) return;
     await mutate(`/employees/${employee.user.id}`, "DELETE");
   }
 
@@ -449,6 +461,9 @@ export default function App() {
     ["ASSIGNED", "IN_PROGRESS"].includes(o.status)
   );
   const title = section === "Overview" ? "Good day" : section;
+  const managerEmployees = employees.filter((employee) => employee.user.role === "MANAGER" && employee.user.isActive);
+  const allStaffBusy = barbers.length > 0 && available.length === 0;
+  const noStaffRegistered = barbers.length === 0;
   const selectedOrderServices = services.filter((service) => orderServiceIds.includes(service.id));
   const selectedOrderBarber = available.find((barber) => barber.id === orderBarber);
   const customerMatches = customers
@@ -796,7 +811,7 @@ export default function App() {
               <div>
                 <h3>Service catalogue</h3>
                 <p className="muted">
-                  Prices and commissions are snapshotted when an order is created.
+                  The standard price list is ready to use. Prices and commissions are snapshotted when an order is created; add more services whenever needed.
                 </p>
               </div>
               {(user?.role === "ADMIN" || user?.role === "MANAGER") && (
@@ -1087,13 +1102,30 @@ export default function App() {
         <Modal title="Add inventory item" close={() => setShowInventory(false)}>
           <form className="stack" onSubmit={submitInventory}>
             <label>Item name<input value={inventoryName} onChange={(e) => setInventoryName(e.target.value)} required autoFocus /></label>
+            {user?.role === "ADMIN" && (
+              <label>
+                Manager owner
+                <select
+                  value={inventoryManagerId || managerEmployees[0]?.user.id || ""}
+                  onChange={(e) => setInventoryManagerId(e.target.value)}
+                  required
+                >
+                  <option value="">Select Manager</option>
+                  {managerEmployees.map((employee) => (
+                    <option value={employee.user.id} key={employee.user.id}>
+                      {employee.user.fullName || employee.user.username}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <label>Unit<input value={inventoryUnit} onChange={(e) => setInventoryUnit(e.target.value)} required /></label>
             <label>Opening quantity<input type="number" min="0" step="0.01" value={inventoryQuantity} onChange={(e) => setInventoryQuantity(e.target.value)} required /></label>
             <label>Reorder level<input type="number" min="0" step="0.01" value={inventoryReorderLevel} onChange={(e) => setInventoryReorderLevel(e.target.value)} required /></label>
             <label>Cost price (KES)<input type="number" min="0" step="0.01" value={inventoryCostPrice} onChange={(e) => setInventoryCostPrice(e.target.value)} /></label>
             <div className="modal-actions">
               <button type="button" className="secondary" onClick={() => setShowInventory(false)}>Cancel</button>
-              <button className="primary">Save item</button>
+              <button className="primary" disabled={user?.role === "ADMIN" && !managerEmployees.length}>Save item</button>
             </div>
           </form>
         </Modal>
@@ -1241,9 +1273,19 @@ export default function App() {
                 <option value="MPESA">M-Pesa</option>
               </select>
             </label>
-            {available.length === 0 && (
+            {available.length > 0 && (
+              <div className="availability-note">
+                Available personnel: {available.map((staff) => staff.name).join(", ")}. Manager-controlled availability updates when an order is started, completed, or cancelled.
+              </div>
+            )}
+            {allStaffBusy && (
               <div className="alert">
-                All staff members are busy. A new order cannot be assigned yet.
+                All staff members are occupied. A new order cannot be assigned until the Manager completes or cancels an active order.
+              </div>
+            )}
+            {noStaffRegistered && (
+              <div className="alert">
+                No active personnel are registered. An Admin must create a Barber or Shampoo Assistant before assigning an order.
               </div>
             )}
             <div className="modal-actions">
@@ -1390,7 +1432,7 @@ function OrderTable({
                       </button>
                     )}
                   {o.status === "IN_PROGRESS" &&
-                    (user?.role === "ADMIN" || user?.role === "BARBER" || user?.role === "SHAMPOO_ASSISTANT") && (
+                    (user?.role === "ADMIN" || user?.role === "MANAGER" || user?.role === "BARBER" || user?.role === "SHAMPOO_ASSISTANT") && (
                       <button
                         className="mini-action complete"
                         onClick={() => mutate(`/orders/${o.id}/complete`)}
