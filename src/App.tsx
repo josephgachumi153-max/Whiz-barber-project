@@ -65,7 +65,7 @@ type Order = {
   servicePrice: string | number;
   commissionAmt: string | number;
   createdAt: string;
-  customer: Customer;
+  customer: Customer | null;
   service?: Service;
   barber: Barber;
   paymentMethod: string;
@@ -77,7 +77,7 @@ type Sale = {
   amount: string | number;
   commissionAmount: string | number;
   createdAt: string;
-  customer: Customer;
+  customer: Customer | null;
   service?: Service;
   barber: Barber;
   paymentMethod?: string;
@@ -347,8 +347,8 @@ export default function App() {
   async function submitOrder(e: FormEvent) {
     e.preventDefault();
     try {
-      if (!orderCustomer || !orderServiceIds.length || !orderBarber) {
-        throw new Error("Choose a customer, at least one service, and a staff member");
+      if (!orderServiceIds.length || !orderBarber) {
+        throw new Error("Choose at least one service and a staff member");
       }
       const customer = orderCustomer === "__new__"
         ? {
@@ -359,7 +359,11 @@ export default function App() {
       await request("/orders", {
         method: "POST",
         body: JSON.stringify({
-          ...(customer ? { newCustomer: customer } : { customerId: orderCustomer }),
+          ...(customer
+            ? { newCustomer: customer }
+            : orderCustomer
+              ? { customerId: orderCustomer }
+              : {}),
           serviceIds: orderServiceIds,
           barberId: orderBarber,
           paymentMethod: payment
@@ -897,7 +901,7 @@ export default function App() {
                 <tbody>
                   {sales.map((s) => (
                     <tr key={s.id}>
-                      <td>{s.customer?.name}</td>
+                      <td>{s.customer?.name || "Walk-in"}</td>
                       <td>{s.order?.items?.length ? s.order.items.map((item) => item.service.name).join(", ") : s.service?.name}</td>
                       <td>{s.barber?.name}</td>
                       <td>
@@ -1135,20 +1139,20 @@ export default function App() {
         <Modal title="Create service order" close={() => setShowOrder(false)}>
           <form className="stack" onSubmit={submitOrder}>
             <p className="muted small">
-              Search for an enrolled customer or add a new one, select one or more
-              services, then assign staff and payment method. Prices and commission
-              are frozen at creation.
+              Search for an enrolled customer or add a new one, or leave the
+              customer blank for a walk-in. Select one or more services, then
+              assign staff and payment method. Prices and commission are frozen
+              at creation.
             </p>
             <label>
-              Customer name or phone
+              Customer name or phone (optional)
               <input
                 value={customerSearch}
                 onChange={(e) => {
                   setCustomerSearch(e.target.value);
                   setOrderCustomer("");
                 }}
-                placeholder="Search enrolled customers"
-                required
+                placeholder="Search enrolled customers or leave blank for a walk-in"
                 autoFocus
               />
             </label>
@@ -1299,7 +1303,7 @@ export default function App() {
               <button
                 className="primary"
                 disabled={
-                  !available.length || !orderCustomer || !orderServiceIds.length || !services.length
+                  !available.length || !orderServiceIds.length || !services.length
                 }
               >
                 Create order
@@ -1402,7 +1406,7 @@ function OrderTable({
           {orders.map((o) => (
             <tr key={o.id}>
               <td>
-                <b>{o.customer?.name || "Customer"}</b>
+                <b>{o.customer?.name || "Walk-in"}</b>
                 <small className="cell-sub">
                   {o.items?.length ? o.items.map((item) => item.service.name).join(", ") : o.service?.name || "Service"} ·{" "}
                   {new Date(o.createdAt).toLocaleTimeString([], {

@@ -185,8 +185,8 @@ const orderSchema = z.object({
   barberId: z.string().min(1),
   paymentMethod: z.nativeEnum(PaymentMethod).default(PaymentMethod.CASH),
   notes: z.string().max(500).optional()
-}).refine((value) => Boolean(value.customerId) !== Boolean(value.newCustomer), {
-  message: "Choose an existing customer or provide a new customer"
+}).refine((value) => !(value.customerId && value.newCustomer), {
+  message: "Choose an existing customer or provide a new customer, not both"
 }).refine((value) => Boolean(value.serviceIds?.length || value.serviceId), {
   message: "Choose at least one service",
   path: ["serviceIds"]
@@ -748,7 +748,7 @@ app.post("/api/orders", { preHandler: [auth, role(Role.ADMIN, Role.MANAGER)] }, 
     prisma.barber.findFirst({ where: { id: input.barberId, isActive: true } })
   ]);
 
-  if (!input.newCustomer && !existingCustomer) {
+  if (input.customerId && !existingCustomer) {
     return reply.code(404).send({ message: "Active customer not found in your book" });
   }
   const servicesById = new Map(services.map((service) => [service.id, service]));
@@ -783,11 +783,11 @@ app.post("/api/orders", { preHandler: [auth, role(Role.ADMIN, Role.MANAGER)] }, 
         ? await tx.customer.create({
             data: { ...input.newCustomer, email: input.newCustomer.email || null, managerId }
           })
-        : existingCustomer!;
+        : existingCustomer;
       return tx.serviceOrder.create({
         data: {
           managerId,
-          customerId: customer.id,
+          customerId: customer?.id,
           serviceId: serviceLines[0].service.id,
           barberId: barber.id,
           servicePrice: totalPrice,
@@ -943,14 +943,16 @@ app.post("/api/orders/:id/complete", { preHandler: [auth, role(Role.BARBER, Role
         data: { status: OrderStatus.COMPLETED, completedAt: new Date() }
       });
 
-      await tx.customer.update({
-        where: { id: order.customerId },
-        data: {
-          totalVisits: { increment: 1 },
-          totalSpent: { increment: price },
-          loyaltyPoints: { increment: points }
-        }
-      });
+      if (order.customerId) {
+        await tx.customer.update({
+          where: { id: order.customerId },
+          data: {
+            totalVisits: { increment: 1 },
+            totalSpent: { increment: price },
+            loyaltyPoints: { increment: points }
+          }
+        });
+      }
 
       return { order: completed, transaction };
     });
